@@ -4,13 +4,13 @@
 
 1. The spike token, made from the template URL below, saved in `.dev.vars` as `CLOUDFLARE_API_TOKEN`.
 2. One click on the Deploy button's GitHub authorization (Q6).
-3. The narrow Analytics-only token and the "spike-ops" token (see Q1), or doing those calls from the dashboard.
+3. The narrow Analytics-only token and the "spike-ops" token (DNS Edit, Workers Scripts Edit, API Tokens Read; see Q1). The dashboard can replace the spike-ops calls only; the Analytics-only token can't be replaced by the dashboard.
 4. Token edits for the Q1 drop-one-group checks.
-5. Cleanup only he can do: delete the clone repo, revoke the tokens.
+5. Cleanup only he can do: delete the clone repo, remove the Workers Builds connection, revoke the tokens.
 
 Part A used a read-only token on camada.app and ran about 40 GraphQL queries. It created nothing in Cloudflare or GitHub.
 
-Placeholders: `<zone>`, `<acc>`, `<ip-N>` (client IPs), ray IDs cut to 6 characters, rule IDs cut to 6 characters. Part B records use the same placeholders (`<zone>`, `<acc>`, `<runner-ip>`; rays, rule and ruleset IDs cut to 6 chars). Full values stay only in the local evidence folder, never in this public file.
+Placeholders: `<zone>`, `<acc>`, `<ip-N>` (client IPs), ray IDs cut to 6 characters, rule IDs cut to 6 characters, all other IDs (operation, list, DNS record) cut to 6 chars. Part B records use the same placeholders (`<zone>`, `<acc>`, `<runner-ip>`; rays, rule and ruleset IDs cut to 6 chars). Never put full values in this public file; keep full values outside the repo (e.g. the factory run's evidence folder) only if needed.
 
 ## Summary
 
@@ -36,8 +36,8 @@ This table is the one place status is tracked. Update it when Part B runs.
    | `datetime_gt` | 453 of 934 | drops 481 rows (51.5%) |
    | `orderBy:[datetime_ASC, rayName_ASC]` with cursor `(datetime, rayName)` | 934 of 934 | 20 pages, no gaps, no loops |
 
-   Keyset filter: `datetime_geq:$s, OR:[{datetime_gt:$s},{datetime:$s, rayName_gt:$r}]`.
-   **Recommendation:** make this keyset the only paging mechanism, run over `[cursor, now - lag)` with an explicit `datetime_lt:$e` upper bound. Rows arrive about 1-2 min late, and a cursor that reaches `now` skips late rows for good. Drop the epic's "split the window in half when full", which can't go below 1 s and so still fails on a second with more than 10,000 rows. At real load (Q5) one page usually covers a whole 5-minute tick, and a 30-day backfill is tens of pages, not hundreds of per-minute windows. Camada already keeps the cursor, so `/edge/rows` should reply with the next `(datetime, rayName)` cursor. That lets the Worker keep streaming bodies unparsed.
+   Keyset filter: `datetime_geq:$s, datetime_lt:$e, OR:[{datetime_gt:$s},{datetime:$s, rayName_gt:$r}]`.
+   **Recommendation:** make this keyset the only paging mechanism, run over `[cursor, now - lag)` with an explicit `datetime_lt:$e` upper bound. Rows are expected to arrive 1–2 min late (Part B step 6 measures it), and a cursor that reaches `now` skips late rows for good. Drop the epic's "split the window in half when full", which can't go below 1 s and so still fails on a second with more than 10,000 rows. At real load (Q5) one page usually covers a whole 5-minute tick, and a 30-day backfill is tens of pages, not hundreds of per-minute windows. Camada already keeps the cursor, so `/edge/rows` should reply with the next `(datetime, rayName)` cursor. That lets the Worker keep streaming bodies unparsed.
 3. **No `sampleInterval` on rows.** `ZoneHttpRequestsAdaptive` has no such field. It exists only as `avg{sampleInterval}` in `httpRequestsAdaptiveGroups`. Rows are a sample (934 rows vs a groups `count` of 2562). Groups `count`/`sum` are sampling-scaled estimates, so volumes come from groups and rows are evidence. A groups result can also come back full (10,000 groups, e.g. more than 10,000 IPs), so treat that like a full rows page and check `sum(ips.count) == tot.count` at runtime.
 4. **"No security event" is `"unknown"`, not empty.** Clean rows carry `securityAction:"unknown"` and `securitySource:"unknown"`. The mapper must treat `unknown` as none. A check against `""` matches every row.
 5. **Own-block marker (hypothesis until Part B).** `rulesMetadata` and `productMatches` are empty on Free. The likely marker is `firewallEventsAdaptive` filtered server-side to our rule's `ruleId`, fetched as one more alias in the same request. Two cautions: that dataset is sampled on its own (it has its own `sampleInterval`), so a `rayName` join will miss some of our blocks; and `rule.id` changes if the rule is recreated, so look it up each tick from the stable `ref` while reading the entrypoint. `securitySource` alone can't tell our rule from a customer's own custom rules. Part B step 6 decides.
@@ -76,7 +76,7 @@ https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=%5B%7B%22key%
 ```
 **Caveat.** `zone_waf` and `account_filter_lists` are not in the documented key table. User-token URLs drop unmatched keys silently and don't accept group IDs. If the form shows fewer than 4 permissions, get the real keys from `GET /user/tokens/permission_groups`, or use the account-token form (`https://dash.cloudflare.com/?to=/:account/api-tokens&permissionGroupKeys=...`), which accepts group IDs.
 
-**Token gaps.** Three Part B calls are outside the 4 groups: creating or deleting the `cf-test.camada.dev` DNS record (DNS Edit), `GET .../workers/scripts/<name>/schedules` (Workers Scripts Read), and `GET .../tokens/permission_groups` (API Tokens Read). Make them from Gabe's dashboard or with a separate short-lived "spike-ops" token, never the spike token, so the 4-group test stays clean. Step 2 below needs its own narrow Analytics-only token.
+**Token gaps.** Part B calls outside the 4 groups: creating or deleting the `cf-test.camada.dev` DNS record (DNS Edit), `GET .../workers/scripts/<name>/schedules` (Workers Scripts Read), `GET .../tokens/permission_groups` (API Tokens Read), and the cleanup calls that delete the cloned Worker and check it is gone (Workers Scripts Edit/Read). Removing the Workers Builds connection is dashboard only. Make the API calls from Gabe's dashboard or with a separate short-lived "spike-ops" token (DNS Edit, Workers Scripts Edit, API Tokens Read), never the spike token, so the 4-group test stays clean. Step 2 below needs its own narrow Analytics-only token.
 
 **Pending (Part B step 1).**
 1. Open the template URL and check the caveat above.
@@ -92,8 +92,8 @@ Fallback body for `POST /accounts/{acc}/tokens`: the same groups by ID (`GET /ac
 **Expected:** accepted, since the epic says Free allows 5 custom rules (unverified until Part B) and `ip.src in $list` is allowed. The `cf.client.bot` exemption cannot be tested from the runner; it stays DOCS.
 
 **Part B (steps 0, 4, 5).**
-0. Preflight: load the token from `.dev.vars`. `GET /user/tokens/verify`. `GET /zones?name=camada.dev` and assert `name == "camada.dev"`. Use only that zone and its account in write URLs. `GET /accounts/{acc}/rules/lists`: if the Free list slot (1 list; epic, unverified until Part B) is taken, stop and ask. Never reuse or delete an existing list. Check `cf-test.camada.dev` resolves proxied; if absent, create a proxied `AAAA 100::` record and log it.
-4. Create the rule: GET the entrypoint. On 404, PUT it with only our rule. Otherwise `POST /zones/<zone>/rulesets/<ruleset_id>/rules`. Never PUT an existing entrypoint (it replaces all custom rules). Cleanup deletes only our rule via `DELETE /zones/<zone>/rulesets/<id>/rules/<rule_id>`.
+0. Preflight: load the token from `.dev.vars`. `GET /user/tokens/verify`. `GET /zones?name=camada.dev` and assert `name == "camada.dev"`. Use only that zone and its account in write URLs. `GET /accounts/{acc}/rules/lists`: if the Free list slot (1 list; epic, unverified until Part B) is taken, stop and ask. Never reuse or delete an existing list. Check `cf-test.camada.dev` resolves proxied; if absent, create a proxied `AAAA 100::` record (via spike-ops or the dashboard) and log it.
+4. Create the rule: GET the entrypoint. On 404, PUT it with only our rule. On 200, `POST /zones/<zone>/rulesets/<ruleset_id>/rules`. On anything else, stop. Never PUT an existing entrypoint (it replaces all custom rules). Cleanup deletes only our rule via `DELETE /zones/<zone>/rulesets/<ruleset_id>/rules/<rule_id>`.
    ```
    expression: (ip.src in $camada_block and not cf.client.bot
                 and http.request.timestamp.sec lt <now+900>
@@ -101,7 +101,7 @@ Fallback body for `POST /accounts/{acc}/tokens`: the same groups by ID (`GET /ac
    action: block, ref: "camada_block_v1", description: "camada:block v1"
    ```
    Record whether Free accepts it, plus `rule.id`, `ruleset.id` and `version`.
-5. Effect: 3 curls from the runner (listed) to `https://cf-test.camada.dev/` should return a Cloudflare 403. Replace the list with documentation-range items only, wait for the operation (same 1 s / 60 s bound as Q4), and re-curl: expect a pass. Re-list the runner, wait for the bulk op, and confirm one 403 BEFORE the next step (otherwise a later pass proves nothing). Then PATCH the deadline to now+120, sleep once until the deadline plus 30 s, re-curl: expect a pass (dead-man's switch). Pass means not the rule's 403 and no firewall event for that ray (the origin `100::` may return an error page anyway). Keep total probe traffic under 50 requests, no bursts. Record the curl status lines and the block-page ray.
+5. Effect: 3 curls from the runner (listed) to `https://cf-test.camada.dev/` should return a Cloudflare 403. Replace the list with documentation-range items only, wait for the operation (same 1 s / 60 s bound as Q4), and re-curl: expect a pass. Re-list the runner, wait for the bulk op, and confirm one 403 BEFORE the next step (otherwise a later pass proves nothing). Then PATCH the deadline to now+120, sleep once until the deadline plus 30 s, re-curl: expect a pass (dead-man's switch). Pass means the status is not 403 (the `100::` origin gives a 5xx, never a 403). Secondary only: no firewall event for that ray, since that dataset is sampled and late. Keep total probe traffic under 50 requests, no bursts. Record the curl status lines and the block-page ray.
 
 ## Q3: how our block shows up
 
@@ -134,11 +134,11 @@ The 20 newest security rows were all one scanner burst; no custom-rule or bot so
 
 **Part B (steps 2, 3).**
 2. `POST /accounts/<acc>/rules/lists {"name":"camada_block","kind":"ip"}`. `PUT .../items` with `[{"ip":"<runner-ip>","comment":"camada"}]` plus about 1,000 documentation-range items (198.51.100.0/24 singles, `2001:db8:N::/64`). Record the `operation_id`, poll `GET .../rules/lists/bulk_operations/{op}` every 1 s for at most 60 s, and time it (a timeout is a result, record it). Send a second PUT while the first is pending and record the exact error. Item formats: IPv4 single and /8-/32, IPv6 /4-/64. Send one illegal item (`/65`) and record the error.
-3. Atomicity: while a PUT replacing the list with a different 1,001 items (still including `<runner-ip>`, so the Q2 step-5 curls stay blocked) runs, poll `GET /accounts/<acc>/rules/lists/<list>` (one request; read `num_items`) every 500 ms for at most 60 s, then confirm any low reading with one `GET .../items` page. Paging `.../items` mid-replace would mix before and after. Record the minimum count seen. Any 0 means the replace is not atomic, so the Worker must diff with POST/DELETE.
+3. Atomicity: while a PUT replacing the list with a different 1,001 items (still including `<runner-ip>`, so the Q2 step-5 curls stay blocked) runs, poll `GET /accounts/<acc>/rules/lists/<list>` (one request; read `num_items`) every 500 ms for at most 60 s, then confirm any low reading with one `GET .../items` page. Paging `.../items` mid-replace would mix before and after. Record the minimum count seen. Any reading other than 1,001 means the replace is not atomic (the old and new sets share `<runner-ip>`, so a non-atomic replace may dip to 1 or rise to about 2,001, never 0), so the Worker must diff with POST/DELETE.
 
 ## Q5: GraphQL budget and paging
 
-**Load, 7 days of eyeball traffic** (`httpRequestsAdaptiveGroups` by `datetimeMinute`, HTTP 200). The query returned exactly 10,000 groups, so it was cut off. The query used `orderBy:[count_DESC]` and the smallest count returned was 2, so the cut drops at most 80 minutes, all with a count of 2 or less. p50/p99/max are unaffected, and the total is low by at most about 160. Total count 54,021. Per minute: p50 3, p99 25, p99.9 382, max 2562 (estimated count).
+**Load, 7 days of eyeball traffic** (`httpRequestsAdaptiveGroups` by `datetimeMinute`, HTTP 200). The query returned exactly 10,000 groups, so it was cut off. The query used `orderBy:[count_DESC]` and the smallest count returned was 2, so the cut drops at most 80 minutes, all with a count of 2 or less. max is unaffected; p50 and p99 can shift by at most 40 and 1 ranks, and the total is low by at most about 160. Total count 54,021. Per minute: p50 3, p99 25, p99.9 382, max 2562 (estimated count).
 
 **Size, 3 busiest minutes** (`httpRequestsAdaptive`, `limit:10000`, 0.5-0.75 s):
 
@@ -159,7 +159,7 @@ tot:  httpRequestsAdaptiveGroups(limit:1, filter:{same}){count sum{edgeResponseB
 This run used `orderBy:[datetime_ASC]` only; production must use `[datetime_ASC, rayName_ASC]`.
 Result: 934 rows, 5 IP groups, `sum(ips.count) == tot.count == 2562`.
 
-**Aliased windows.** Full field list: 5 and 20 one-minute windows returned HTTP 200. 30, 40 and 50 (`rayName`+`datetime` only) also returned 200. 60 returned HTTP 200 with `data:null` and error code `quota`: `In combination, your request queries too many nodes, zones and accounts`.
+**Aliased windows.** Full field list: 5 and 20 one-minute windows returned HTTP 200. 30, 40 and 50 (`rayName`+`datetime` only) also returned 200. The 5-window test's windows held 934, 5, 26, 7 and 6 rows (row counts for the larger tests were not recorded). 60 returned HTTP 200 with `data:null` and error code `quota`: `In combination, your request queries too many nodes, zones and accounts`.
 
 **Paging.** See the table under "What changed". Rate-limit (429) responses were not hit.
 
