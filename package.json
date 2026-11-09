@@ -1,0 +1,43 @@
+{
+  "name": "camada-cloudflare",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Camada for Cloudflare: a Worker in your own account that sends your zone's request analytics to Camada and keeps a camada_block IP list in your WAF in sync.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "vitest run",
+    "dev": "wrangler dev --test-scheduled",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "0.22.0",
+    "@cloudflare/workers-types": "^5.20261018.1",
+    "@types/node": "^26.4.1",
+    "@vitest/runner": "4.1.11",
+    "@vitest/snapshot": "4.1.11",
+    "typescript": "^7.0.2",
+    "vitest": "4.1.11",
+    "wrangler": "^4.151.1"
+  },
+  "cloudflare": {
+    "bindings": {
+      "CAMADA_KEY": {
+        "description": "Your Camada project key. Copy it from **my.camada.app → your project → Setup → Deploy on Cloudflare**."
+      },
+      "CLOUDFLARE_API_TOKEN": {
+        "description": "A Cloudflare API token for this zone. Use the pre-filled link on the same Camada Setup page; it asks only for the permissions this Worker needs."
+      },
+      "ZONE": {
+        "description": "The domain to protect, for example `example.com`. It must be a zone in this Cloudflare account."
+      },
+      "HOSTS": {
+        "description": "Optional. Comma-separated hostnames to watch and protect, for example `www.example.com,shop.example.com`. Leave empty for every hostname in the zone."
+      }
+    }
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

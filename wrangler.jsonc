@@ -1,0 +1,17 @@
+{
+  // Camada for Cloudflare. No route: this Worker never sits in front of your site.
+  // A cron reads your zone's request analytics, sends them to Camada, and syncs the camada_block list.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "camada-cloudflare",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-15",
+  "workers_dev": false,
+  "preview_urls": false,
+  "triggers": { "crons": ["*/5 * * * *"] },
+  "vars": {
+    "ZONE": "",
+    "HOSTS": "",
+    "CAMADA_URL": "https://in.camada.app"
+  },
+  "observability": { "enabled": true }
+}
