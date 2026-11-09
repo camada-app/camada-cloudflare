@@ -36,16 +36,16 @@ Placeholders: `<zone>`, `<acc>`, `<ip-N>` / `<runner-ip>` (client IPs); ray, rul
 3. **No `sampleInterval` on rows.** `ZoneHttpRequestsAdaptive` has no such field. It exists only as `avg{sampleInterval}` in `httpRequestsAdaptiveGroups`. Rows are a sample (934 rows vs a groups `count` of 2562). Groups `count`/`sum` are sampling-scaled estimates, so volumes come from groups and rows are evidence. A groups result can also come back full (10,000 groups, e.g. more than 10,000 IPs), so treat that like a full rows page and check `sum(ips.count) == tot.count` at runtime.
 4. **"No security event" is `"unknown"`, not empty.** Clean rows carry `securityAction:"unknown"` and `securitySource:"unknown"`. The mapper must treat `unknown` as none. A check against `""` matches every row.
 5. **Own-block marker** (Q3): `firewallEventsAdaptive` filtered to our rule's `ruleId`, as one more alias in the same request. Contract:
-   - Create path: entrypoint GET 404 → PUT the entrypoint with only our rule. 200 with no rule `ref:"camada_block_v1"` → `POST /zones/<zone>/rulesets/<ruleset_id>/rules`. Never PUT an existing entrypoint: it replaces every customer custom rule. Uninstall deletes only our rule by id (`DELETE .../rulesets/<id>/rules/<rule_id>`).
+   - Create path: entrypoint GET 404 → PUT the entrypoint with only our rule. 200 with no rule `ref:"camada_block_v1"` → `POST /zones/<zone>/rulesets/<ruleset_id>/rules` (DOCS, untested; it fails if the zone is at its plan's custom-rule limit, which needs a clear error to the customer). Never PUT an existing entrypoint: it replaces every customer custom rule. Uninstall deletes only our rule by id (`DELETE .../rulesets/<id>/rules/<rule_id>`, DOCS, untested).
    - Only the Worker creates the rule and only PATCHes it after that, so `rule.id` stays stable. Keep `rule.id` from the create or PATCH response (the PATCH that pushes the deadline returns the ruleset), and re-GET the entrypoint only when nothing is stored or a PATCH returns 404. Keep every `rule.id` ever created and match on that set, so late events and backfill from an older rule still count as ours.
    - That dataset is sampled on its own, so a `rayName` join can miss blocks. Count our blocks from `firewallEventsAdaptiveGroups` filtered by `ruleId` (untested), and use joined rows only as per-request evidence, as in item 3.
-   - Block counts come from the groups; joined rows are evidence only. The firewall-events alias could use the same `(datetime, rayName)` keyset filter (untested).
+   - The firewall-events alias could use the same `(datetime, rayName)` keyset filter (untested).
 6. **Window budget.** 700-930 bytes per row, so a full 10,000-row page is 7-9.3 MB (numbers in Q5). Streaming keeps CPU low. Memory while streaming and a 9 MB `/edge/rows` page were not tested in Part B.
 7. **One query carries everything.** Rows, per-IP groups and the total fit in one request. Full fields are proven up to 20 aliased windows; 30-50 used `rayName`+`datetime` only; 60 fail (Q5). With the keyset recommendation in item 2 this cap rarely matters.
 8. **Range limit.** A query may span at most 4w2d, and retention is about 30 days. Backfill caps at 30 days.
 9. **Token needs a 4th group, Zone > Zone > Read,** to resolve `ZONE` to zone and account IDs. Two of the template URL's short keys are unverified (see Q1).
 10. **Item prefixes** are IPv4 `/8`-`/32` and IPv6 `/12`-`/128` (Q4), not the runbook's `/4`-`/64`.
-11. **List writes converge.** One Worker per Cloudflare account writes `camada_block`. Several zones in one account would share that list and one writer; that case is untested and out of scope, as is the Free list quota. Each tick the Worker PUTs the full desired list unless the previous `operation_id` is still pending. This repairs drift from a failed op, a 429 or a dashboard edit, at one call per tick. A `completed` op can take seconds to take effect at the edge, in either direction (Q2). Concurrent PUTs return `429 / 10040`, Cloudflare's general rate limit, not a "pending" error (Q4). Handle 429 once, in the API client that every call uses (list PUT, deadline PATCH, GraphQL): skip the step and let the next tick catch up. Resolve `ZONE` to zone and account IDs once and store them.
+11. **List writes converge.** One Worker per Cloudflare account writes `camada_block`. Several zones in one account would share that list and one writer; that case is untested and out of scope, as is the Free list quota. Each tick the Worker PUTs the full desired list unless the previous `operation_id` is still pending. This repairs drift from a failed op, a 429 or a dashboard edit, at two calls per tick (op-status GET, then PUT). A `completed` op can take seconds to take effect at the edge, in either direction (Q2). Concurrent PUTs return `429 / 10040`, Cloudflare's general rate limit, not a "pending" error (Q4). Handle 429 once, in the API client that every call uses (list PUT, deadline PATCH, GraphQL): skip the step and let the next tick catch up. Resolve `ZONE` to zone and account IDs once and store them.
 12. **Limits found on Free.** `botManagementDecision` is denied (`authz` error), so never select it. A 7-day per-minute groups series hits the 10,000-group cap (10,080 minutes).
 
 ## Q1: minimal token
@@ -105,11 +105,11 @@ Probes (`curl -4 --resolve cf-test.camada.dev:443:<edge-ip> https://cf-test.cama
 
 | Step | Probe | Status | Ray |
 |---|---|---|---|
-| Runner listed (rule + list 8 s old) | listed#1 | 403 block page | …23ebd5 |
+| Runner listed (rule 8 s old, list ~30 s) | listed#1 | 403 block page | …23ebd5 |
 | | listed-extra#1, #2 | 403, 403 | …fc4cd0, …3c265b |
 | List swapped to docs ranges only (op done 1.4 s) | docs-only#1 | 522 (pass) | …bef58d |
 | Runner re-listed (op done 0.2 s) | relisted#1, 8 s apart #2 | 522, then 403 | …5e8f8a, …2c4cfe |
-| Deadline PATCHed to now+120 (200); probe at deadline + 30 s | after-deadline#1 | 522 (pass) | …5e910c |
+| Deadline PATCHed to now+120 (200); probe ~37 s after the deadline (planned +30 s) | after-deadline#1 | 522 (pass) | …5e910c |
 
 Findings: `completed` does not mean enforced at the edge; either direction can take seconds. Attempt 3: the removal was live at the first probe (~1.6 s after its PUT); the add was not live ~0.3-0.5 s after its PUT and was live 8 s later. Attempt 2 (run2 log): the removal op completed in 0.42 s, the first probe was still 403, and the probe ~10 s later passed. The dead-man's switch works: about 37 s after the deadline the listed runner passed. The 403s carry the Cloudflare block page and a `cf-ray`.
 
@@ -149,7 +149,7 @@ Blocked vs passed rays (probe rays cut to their last 6 chars, since the probes s
 | …bef58d | docs-only#1 (pass) | 522 / unknown / unknown | no event |
 | …5e910c | after-deadline#1 (pass) | 522 / unknown / unknown | no event |
 
-All 4 blocked rays carry the `ruleId` and none of the passed rays do. The `ruleId` and `rulesetId` match the PUT response, and the `description` is our `camada:block v1`. A customer can copy a description, so only `ruleId` is the marker. The `relisted#1` pass ray never appeared in `httpRequestsAdaptive` (still absent after 5 min; `sampleInterval` was 1, so the cause is unknown). Two `requestSource:"edgeWorkerFetch"` rows from the runner IP did appear (one next to `relisted#1`, one next to `after-deadline#1`); they are separate rays.
+All 4 blocked rays carry the `ruleId` and none of the passed rays do. The `ruleId` and `rulesetId` match the PUT response, and the `description` is our `camada:block v1`. A customer can copy a description, so only `ruleId` is the marker. The `relisted#1` pass ray never appeared in `httpRequestsAdaptive` (still absent after 5 min; the sample rate for that window was not queried, so the cause is unknown). Two `requestSource:"edgeWorkerFetch"` rows from the runner IP did appear (one next to `relisted#1`, one next to `after-deadline#1`); they are separate rays.
 
 **Arrival lag.** Measured on an idle zone with 7 probes; recheck under load. Polled every 15 s from the first batch of probes to 5 min after the last probe. The last probe (polled right after sending) showed up in `httpRequestsAdaptive` within 31 s. The first batch showed up at 50-66 s after sending, but polling started late, so those are upper bounds. Firewall events arrived at 50-81 s (upper bounds; one ray was in `httpRequestsAdaptive` 15 s before its event). Use at least a 2 min lag behind `now`.
 
@@ -206,7 +206,7 @@ Result: 934 rows, 5 IP groups, `sum(ips.count) == tot.count == 2562`.
 **Runbook (step 7).**
 1. Gabe opens `https://deploy.workers.cloudflare.com/?url=https://github.com/camada-app/camada-cloudflare`, picks the `camada-app` org and authorizes GitHub.
 2. Record with screenshots (IDs cropped): whether `CAMADA_KEY` and `CLOUDFLARE_API_TOKEN` are prompted with their descriptions, and whether `ZONE`/`HOSTS` are prompted. Enter dummy values. Do not run the cron on real data.
-3. Confirm the cron with `GET /accounts/<acc>/workers/scripts/<name>/schedules` (needs Workers Scripts Read, which the spike token lacks; use the dashboard or a token with it).
+3. Confirm the cron with `GET /accounts/<acc>/workers/scripts/<name>/schedules` (nominally needs Workers Scripts Read, which the spike token lacks; yet the spike token's `GET /accounts/<acc>/workers/scripts` returned 200 with 0 scripts, so try it first, and fall back to the dashboard).
 4. Clean up: delete the Worker, its Workers Builds connection and the clone repo.
 
 ## Resources created and deleted
@@ -216,8 +216,8 @@ Part A created nothing (see Status). Part B created the rows below on 2026-11-09
 | Resource | Created | Deleted | Verified 404 |
 |---|---|---|---|
 | Attempt 1: DNS record `cf-test.camada.dev` (6dbd53) and list `camada_block` (0e0e0f); no rule | 17:47:10 / 17:49:42 | 17:49:45 / 17:49:43 | entrypoint 404; list GET 404; dns GET 404 |
-| Attempt 2: DNS record (5a45bb) and list (e67462) | 17:50:39 / 17:50:40 | 17:52:05 / 17:52:03 | list GET 404; dns GET 404 |
-| Attempt 2: entrypoint ruleset (148364) with rule `camada_block_v1` (82d2f2) | 17:50:52 | 17:52:02 (`DELETE` ruleset 204) | entrypoint GET 404 |
+| Attempt 2: DNS record (5a45bb) and list (e67462) | 17:50:39 / 17:50:40 | 17:52:04 / 17:52:03 | list GET 404; dns GET 404 |
+| Attempt 2: entrypoint ruleset (148364) with rule `camada_block_v1` (82d2f2) | 17:50:52 | 17:52:02 (`DELETE` ruleset 204) | entrypoint GET 404. Its 6 block events include one at 17:51:49 that the run log doesn't record (likely a manual debug curl before the run was stopped). |
 | Attempt 3: account list `camada_block` (7a816d) | 17:52:42 | 18:01:25 | `GET .../rules/lists/<list>` 404; `GET .../rules/lists` returns 0 lists |
 | Attempt 3: custom rule ref `camada_block_v1` (098e94) and its entrypoint ruleset (84812c) | 17:53:04 | 18:01:24 (`DELETE` ruleset 204) | `GET .../phases/http_request_firewall_custom/entrypoint` 404 |
 | Attempt 3: DNS record `cf-test.camada.dev` (AAAA `100::`, proxied; 6c963b) | 17:52:37 | 18:01:26 | `GET .../dns_records/<id>` 404; no record named `cf-test` remains |
@@ -229,6 +229,6 @@ Part A created nothing (see Status). Part B created the rows below on 2026-11-09
 | "spike-ops" token | not issued | | |
 | Read-only epic token | untouched | | |
 
-Other records in the zone were never touched. A read-only `GET /zones/<zone>/dns_records?per_page=100` after the spike (2026-11-09) returned exactly 5 records, matching the preflight on type, name and proxied (all proxied): A `o-2a23bf029c`, AAAA `edge`, `fallback`, `in`, `staging.in`, all `.camada.dev`. No other fields were compared.
+Other records in the zone were never touched. A read-only `GET /zones/<zone>/dns_records?per_page=100` after the spike (2026-11-09) returned exactly 5 records (1 A, 4 AAAA, all proxied), matching the preflight on type, name and proxied. No other fields were compared.
 
 **Do not copy the cleanup.** The spike deleted the whole entrypoint ruleset only because it had created it and it held only our rule. Uninstall must delete only our rule by id (`DELETE .../rulesets/<id>/rules/<rule_id>`), never the ruleset (see What changed, item 5).
