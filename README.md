@@ -57,9 +57,13 @@ The path `/__scheduled` is what Wrangler 4.160.0 documents for `--test-scheduled
 
 Camada fixes most things on its side, so you don't need to do anything.
 
-When the Camada dashboard (Setup) says your Worker is out of date, open your copy of this repo on GitHub. Go to Actions, pick **Update Camada**, then choose Run workflow. Cloudflare redeploys the Worker within a few minutes. Your settings (zone, hosts and secrets) are kept.
+When the Camada dashboard (Setup) says your Worker is out of date:
 
-If Actions are off, replace your `src/` folder with the one from the [latest release](https://github.com/camada-app/camada-cloudflare/releases) and commit it. Cloudflare redeploys when you push.
+1. Download the source code (zip) of the [latest release](https://github.com/camada-app/camada-cloudflare/releases/latest) and unzip it.
+2. In your copy of this repo, replace the `src/` folder with the one you unzipped, then commit.
+3. Cloudflare redeploys the Worker from that commit within a few minutes. Your settings (zone, hosts and secrets) are kept: they live in `wrangler.jsonc` and in Cloudflare, not in `src/`.
+
+For one-click updates, add [`.github/workflows/update.yml`](https://github.com/camada-app/camada-cloudflare/blob/main/.github/workflows/update.yml) from this repo to your copy. After that, Actions, **Update Camada**, Run workflow does these steps for you.
 
 ## Uninstall
 
