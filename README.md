@@ -60,10 +60,11 @@ Camada fixes most things on its side, so you don't need to do anything.
 When the Camada dashboard (Setup) says your Worker is out of date:
 
 1. Download the source code (zip) of the [latest release](https://github.com/camada-app/camada-cloudflare/releases/latest) and unzip it.
-2. In your copy of this repo, replace the `src/` folder with the one you unzipped, then commit.
-3. Cloudflare redeploys the Worker from that commit within a few minutes. Your settings (zone, hosts and secrets) are kept: they live in `wrangler.jsonc` and in Cloudflare, not in `src/`.
+2. In your copy of this repo, replace the `src/` folder with the one you unzipped, then commit and push.
 
-For one-click updates, add [`.github/workflows/update.yml`](https://github.com/camada-app/camada-cloudflare/blob/main/.github/workflows/update.yml) from this repo to your copy. After that, Actions, **Update Camada**, Run workflow does these steps for you.
+Cloudflare redeploys the Worker within a few minutes of the push. Your settings (zone, hosts and secrets) are kept, because they aren't in `src/`.
+
+To skip these steps next time, add [`.github/workflows/update.yml`](https://github.com/camada-app/camada-cloudflare/blob/main/.github/workflows/update.yml) from camada-app/camada-cloudflare to your copy. Then go to Actions, pick **Update Camada** and choose Run workflow.
 
 ## Uninstall
 
