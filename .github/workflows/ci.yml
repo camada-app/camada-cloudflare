@@ -2,6 +2,7 @@ name: ci
 on: [push, pull_request]
 jobs:
   test:
+    if: github.repository == 'camada-app/camada-cloudflare'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

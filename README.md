@@ -24,7 +24,7 @@ Camada fixes most things on its side, so you don't need to do anything.
 
 When the Camada dashboard (Setup) says your Worker is out of date, open your copy of this repo on GitHub. Go to Actions, pick **Update Camada**, then choose Run workflow. Cloudflare redeploys the Worker within a few minutes. Your settings (zone, hosts and secrets) are kept.
 
-If Actions are off, copy the `src/` folder from the [latest release](https://github.com/camada-app/camada-cloudflare/releases) into your repo and commit it. Cloudflare redeploys when you push.
+If Actions are off, replace your `src/` folder with the one from the [latest release](https://github.com/camada-app/camada-cloudflare/releases) and commit it. Cloudflare redeploys when you push.
 
 ## License
 
