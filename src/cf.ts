@@ -34,17 +34,19 @@ export interface CfReply {
   why: string; // `"<message>" (code <n>)` of errors[0], or the HTTP status
 }
 
+/** The headers of every Cloudflare API call, the analytics read included. The token goes nowhere else. */
+export const cfHeaders = (run: Run) => ({ authorization: `Bearer ${run.token}`, 'content-type': 'application/json' });
+
+/** A small JSON reply, or null. */
+export const json = (res: Response) => res.json<any>().catch(() => null);
+
 export async function cf(run: Run, method: string, path: string, body?: BodyInit): Promise<CfReply> {
-  const res = await call(run, CF + path, {
-    method,
-    headers: { authorization: `Bearer ${run.token}`, 'content-type': 'application/json' },
-    body,
-  });
-  const json = await res.json<any>().catch(() => null);
-  const e = json?.errors?.[0];
+  const res = await call(run, CF + path, { method, headers: cfHeaders(run), body });
+  const reply = await json(res);
+  const e = reply?.errors?.[0];
   return {
     status: res.status,
-    result: json?.result,
+    result: reply?.result,
     code: e?.code,
     why: e ? `"${String(e.message).slice(0, 120)}" (code ${e.code})` : `HTTP ${res.status}`,
   };
@@ -74,7 +76,7 @@ export async function reconcileList(run: Run, account: string): Promise<ListResu
   const got = await cf(run, 'GET', path);
   if (got.status !== 200) return { error: cannot(got.why) };
   const same = (got.result as any[]).filter((l) => l.name === LIST_NAME);
-  const ours = same.find((l) => l.kind === 'ip' && String(l.description).startsWith('camada:block v1'));
+  const ours = same.find((l) => l.kind === 'ip' && String(l.description).startsWith(RULE_DESC));
   if (ours) return { id: ours.id, size: ours.num_items };
   if (same.length) {
     return {
@@ -127,12 +129,11 @@ export async function reconcileRule(run: Run, zone: string, plan: RulePlan | nul
   if (hosts.length > 20 || !hosts.every((h) => typeof h === 'string' && HOST.test(h))) {
     return { ...seen, error: 'Camada sent a host name the Worker would not put in a rule; the rule was left unchanged. Check HOSTS.' };
   }
-  const due = plan.due || d0 == null || d0 - nowS < DAY;
-  const deadline = !mine || due ? nowS + 2 * DAY : d0!;
+  const deadline = plan.due || d0 == null || d0 - nowS < DAY ? nowS + 2 * DAY : d0;
   const expression = ruleExpression(hosts, deadline);
   if (mine && expression === mine.expression) return { ...seen, error: off };
 
-  const rule = { action: 'block', expression, description: RULE_DESC, ref: RULE_REF, enabled: mine ? mine.enabled !== false : true };
+  const rule = { action: 'block', expression, description: RULE_DESC, ref: RULE_REF, enabled: mine?.enabled !== false };
   const body = JSON.stringify(rule);
   const sub = `/zones/${zone}/rulesets/${rs?.id}/rules`;
   const w = !rs

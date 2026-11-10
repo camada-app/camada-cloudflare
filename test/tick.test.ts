@@ -52,9 +52,7 @@ function fresh() {
 }
 
 async function bytesOf(body: unknown): Promise<Uint8Array> {
-  if (body == null) return new Uint8Array();
-  if (typeof body === 'string') return enc.encode(body);
-  return new Uint8Array(await new Response(body as BodyInit).arrayBuffer());
+  return new Uint8Array(await new Response((body ?? null) as BodyInit | null).arrayBuffer());
 }
 
 async function fake(input: RequestInfo | URL, init: any = {}): Promise<Response> {
