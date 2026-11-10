@@ -52,6 +52,9 @@ export async function cf(run: Run, method: string, path: string, body?: BodyInit
   };
 }
 
+// http.host is matched normalised (lowercase, no port, no trailing dot; checked live on a Free zone,
+// camada-all-tz8g), so a plain `in` set needs no port or dot variants, unlike the GraphQL host filter.
+// This relies on every entry being a bare lowercase hostname, which HOST and the server's bad_hosts check enforce.
 export const ruleExpression = (hosts: string[], deadline: number): string =>
   `(ip.src in $camada_block and not cf.client.bot and http.request.timestamp.sec lt ${deadline}` +
   (hosts.length ? ` and http.host in {${hosts.map((h) => `"${h}"`).join(' ')}}` : '') +
