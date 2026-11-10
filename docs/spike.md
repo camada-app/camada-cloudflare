@@ -2,7 +2,7 @@
 
 **Status.** Part A (read-only) done 2026-11-09. Part B (live writes on `camada.dev`, host `cf-test.camada.dev`) ran 2026-11-09 17:47-18:01 UTC and cleaned up. Q6 ran 2026-11-10 in a supervised dashboard session and was cleaned up, so Q1-Q6 are answered. Q1's per-group necessity and the template URL keys stay untested (DOCS).
 
-Part B used the spike token (4 groups + DNS Edit). Only the spike token stays open: Gabe revokes it, or it expires 2026-11-17 (see Resources).
+Part B used the spike token (4 groups + DNS Edit). Still open for Gabe: the spike token (revoke it, or it expires 2026-11-17) and the Cloudflare Workers and Pages GitHub App on `camada-app` (keep or remove; see Resources).
 
 Part A used a read-only token on camada.app and ran about 40 GraphQL queries. Part B made about 25 probe/trace requests over three attempts: attempt 1 stopped on an API 400 (IPv6 `/4` is illegal, see Q4); attempt 2 was killed by hand (the ray header was not parsed, so lag could not be measured). The EXIT trap cleaned up both; only the third attempt is reported.
 
@@ -18,7 +18,7 @@ Placeholders: `<zone>`, `<acc>`, `<ip-N>` / `<runner-ip>` (client IPs); ray, rul
 | Q3 | Own-block marker | PROVEN (live) | `firewallEventsAdaptive.ruleId == our rule.id` (looked up by `ref`). `securitySource:"firewallCustom"` alone is not unique to us. |
 | Q4 | List PUT behavior | PROVEN (live) | 1,001 items replace in 0.7-3.0 s (upper bounds); no dip seen (min 1001). Concurrent PUTs get `429 / 10040`, not a "pending" error. IPv6 prefixes are /12-/128. |
 | Q5 | GraphQL budget and paging | PROVEN (live, camada.app) | About 800 bytes per row. Rows, per-IP groups and total fit in one query. Page on `(datetime, rayName)`. |
-| Q6 | Deploy button | PROVEN (live, dashboard; session record, no screenshots) | Secrets and vars are prompted with their `cloudflare.bindings` descriptions (CAMADA_URL prefilled, no description). Cron `*/5` survives the clone. |
+| Q6 | Deploy button | PROVEN (live, dashboard; no screenshots) | Secrets and vars are prompted with their `cloudflare.bindings` descriptions. Cron `*/5` survives the clone. |
 
 ## What changed in the plan
 
@@ -47,10 +47,9 @@ Placeholders: `<zone>`, `<acc>`, `<ip-N>` / `<runner-ip>` (client IPs); ray, rul
 10. **Item prefixes** are IPv4 `/8`-`/32` and IPv6 `/12`-`/128` (Q4), not the runbook's `/4`-`/64`.
 11. **List writes converge.** One Worker per Cloudflare account writes `camada_block`. Several zones in one account would share that list and one writer; that case is untested and out of scope, as is the Free list quota. Each tick the Worker PUTs the full desired list unless the previous `operation_id` is still pending. This repairs drift from a failed op, a 429 or a dashboard edit, at two calls per tick (op-status GET, then PUT). A `completed` op can take seconds to take effect at the edge, in either direction (Q2). Concurrent PUTs return `429 / 10040`, Cloudflare's general rate limit, not a "pending" error (Q4). Handle 429 once, in the API client that every call uses (list PUT, deadline PATCH, GraphQL): skip the step and let the next tick catch up. Resolve `ZONE` to zone and account IDs once and store them.
 12. **Limits found on Free.** `botManagementDecision` is denied (`authz` error), so never select it. A 7-day per-minute groups series hits the 10,000-group cap (10,080 minutes).
-13. **The Deploy button works as-is** (Q6): secrets from `.dev.vars.example` plus the binding descriptions, vars from `wrangler.jsonc`, cron kept. Onboarding must tell the customer to install the Cloudflare Workers and Pages GitHub App and to expect a private clone.
-14. **The customer's project name becomes the package and Worker name.** Never hardcode `camada-cloudflare` as the script name.
-15. **CAMADA_URL needs a `cloudflare.bindings` description** (tracked in camada-all-1l7h; no code in this spike).
-16. **Rename `@cloudflare/vitest-pool-workers` to `@cloudflare/vitest-plugin`** (npm deprecation warning; tracked in camada-all-4go9; no code in this spike).
+13. **The Deploy button works as-is** (Q6). Onboarding must tell the customer to install the Cloudflare Workers and Pages GitHub App. The clone is a detached copy (one `cloudflare[bot]` commit, not a fork), so fixes to `camada-app/camada-cloudflare` never reach installed Workers. The plan needs an update path (camada-all-g6ga).
+14. **Each install is named by the customer.** Q6 saw Cloudflare rewrite `package.json` `name` to the project name. Camada, onboarding and uninstall must find an install by what Camada controls (`CAMADA_KEY`, account and zone), never by a Worker name.
+15. **Every `wrangler.jsonc` var is an editable prompt.** Each needs a `cloudflare.bindings` description, and settings the customer must not change don't belong in `vars`. `CAMADA_URL` breaks both today (camada-all-1l7h).
 
 ## Q1: minimal token
 
@@ -203,29 +202,30 @@ Result: 934 rows, 5 IP groups, `sum(ips.count) == tot.count == 2562`.
 
 ## Q6: Deploy button
 
-**Answer (PROVEN, live, 2026-11-10).** Claude ran the button in Gabe's Chrome (supervised dashboard session). Source: the "Human decision" record in camada-all-2hh7. No screenshots exist (`q6/` was never created); this section rests on that record and the build log line below.
+**Answer (PROVEN, live, 2026-11-10).** Claude ran the button in Gabe's Chrome (supervised dashboard session). Source: the "Human decision" record in camada-all-2hh7; no screenshots exist.
 
-| Open point | Result | Trace |
-|---|---|---|
-| (a) Secrets and descriptions | `CAMADA_KEY` and `CLOUDFLARE_API_TOKEN` are prompted with their `package.json` `cloudflare.bindings` descriptions. `wrangler secret list` shows both as `secret_text`. | 2hh7 record |
-| (b) Vars | `ZONE` and `HOSTS` are prompted, plus `CAMADA_URL` prefilled `https://in.camada.app` with no description. All 3 vars are bound. | 2hh7 record |
-| (c) Cron | Build log: `Deployed triggers: schedule */5 * * * *`. | build log, quoted in 2hh7 |
+| Open point | Result |
+|---|---|
+| (a) Secrets and descriptions | `CAMADA_KEY` and `CLOUDFLARE_API_TOKEN` are prompted with their `package.json` `cloudflare.bindings` descriptions. `wrangler secret list` shows both as `secret_text`. |
+| (b) Vars | `ZONE` and `HOSTS` are prompted, plus `CAMADA_URL` prefilled `https://in.camada.app` with no description. All 3 vars are bound. |
+| (c) Cron | Build log: `Deployed triggers: schedule */5 * * * *`. |
 
 **Also recorded.**
-- The Cloudflare Workers and Pages GitHub App was installed on `camada-app` first (by Gabe, a prerequisite). It has access to all repos.
+- The Cloudflare Workers and Pages GitHub App was installed on `camada-app` first (by Gabe, a prerequisite).
 - Clone: private repo `camada-app/camada-cloudflare-deploytest`, one commit, by cloudflare[bot], "source repo import".
 - Build: npm 10.9.2 and node 24.22.1 auto-detected; `npm clean-install` OK; deploy command `npm run deploy` (wrangler 4.159.0).
 - Cloudflare rewrote `package.json` `name` to the project name (What changed, item 14).
+- `npm clean-install` warned that `@cloudflare/vitest-pool-workers` is renamed `@cloudflare/vitest-plugin` (camada-all-4go9).
 
 **Caveats.**
-- The cron is shown by the build log only. The old step 3 check failed: `GET /accounts/<acc>/workers/scripts/<name>/schedules` returned 403 on 2026-11-10 (the token lacks Workers Scripts Read), so neither the API nor the Triggers page confirmed it.
+- The cron is confirmed by the build log only. The planned `GET /accounts/<acc>/workers/scripts/<name>/schedules` returned 403 on 2026-11-10 (the spike token lacks Workers Scripts Read). A read-only token with Workers Scripts Read would settle this and the Worker's deletion (Resources).
 - The values entered in the prompts were not recorded.
 
 ## Resources created and deleted
 
-Part A created nothing (see Status). Part B created the rows below on 2026-11-09 (UTC). Each attempt had its own DNS record and list. Each delete was checked with a GET that returned 404 or an empty list (`lists remaining: 0`, `dns by name remaining: 0`).
+Part A created nothing (see Status). Part B created the attempt rows on 2026-11-09 (UTC). Each attempt had its own DNS record and list. Each delete was checked with a GET that returned 404 or an empty list (`lists remaining: 0`, `dns by name remaining: 0`). Q6 (2026-11-10) added the rows marked Q6; their deletes are attested by the session record, and each row says how strongly it was checked.
 
-| Resource | Created | Deleted | Verified 404 |
+| Resource | Created | Deleted | Verified |
 |---|---|---|---|
 | Attempt 1: DNS record `cf-test.camada.dev` (6dbd53) and list `camada_block` (0e0e0f); no rule | 17:47:10 / 17:49:42 | 17:49:45 / 17:49:43 | entrypoint 404; list GET 404; dns GET 404 |
 | Attempt 2: DNS record (5a45bb) and list (e67462) | 17:50:39 / 17:50:40 | 17:52:04 / 17:52:03 | list GET 404; dns GET 404 |
@@ -233,10 +233,10 @@ Part A created nothing (see Status). Part B created the rows below on 2026-11-09
 | Attempt 3: account list `camada_block` (7a816d) | 17:52:42 | 18:01:25 | `GET .../rules/lists/<list>` 404; `GET .../rules/lists` returns 0 lists |
 | Attempt 3: custom rule ref `camada_block_v1` (098e94) and its entrypoint ruleset (84812c) | 17:53:04 | 18:01:24 (`DELETE` ruleset 204) | `GET .../phases/http_request_firewall_custom/entrypoint` 404 |
 | Attempt 3: DNS record `cf-test.camada.dev` (AAAA `100::`, proxied; 6c963b) | 17:52:37 | 18:01:26 | `GET .../dns_records/<id>` 404; no record named `cf-test` remains |
-| Cloned Worker (Q6) | 2026-11-10, Deploy button | 2026-11-10, per the 2hh7 session record (attested) | WEAK: `GET /accounts/<acc>/workers/scripts` returned 200 `[]`, but the token lacks Workers Scripts Read and `.../schedules` returns 403 |
+| Cloned Worker (Q6) | 2026-11-10, Deploy button | 2026-11-10, per the 2hh7 session record (attested) | WEAK: `GET /accounts/<acc>/workers/scripts` returned 200 `[]`, but the token can't read scripts (Q6 caveats) |
 | Workers Builds connection (Q6) | 2026-11-10, with the Worker | Not recorded: 2hh7 says only "Test Worker and clone repo deleted". Builds config belongs to the Worker, so it is expected gone with it | Unverified: the API can't check it with this token |
 | Clone repo `camada-app/camada-cloudflare-deploytest` (Q6) | 2026-11-10, Deploy button | 2026-11-10, per the 2hh7 session record | STRONG, 2026-11-10: `gh repo view` returns "Could not resolve", and `gh` lists camada-app's 7 private repos, so the absence is real |
-| Cloudflare Workers and Pages GitHub App on `camada-app` (access to all repos) | 2026-11-10, by Gabe | Not removed: Gabe's call. It outlives the spike | |
+| Cloudflare Workers and Pages GitHub App on `camada-app` (access to all repos) | 2026-11-10, by Gabe | Not removed: Gabe's call | |
 | Spike token | by Gabe (before Part B) | not deleted: Gabe revokes, or it expires 2026-11-17 | Re-check 2026-11-10: token verifies active; lists 0, custom entrypoint 404, no `cf-test` DNS record |
 | Narrow Analytics-only token | not issued | | |
 | "spike-ops" token | not issued | | |
