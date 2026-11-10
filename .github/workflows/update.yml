@@ -1,0 +1,30 @@
+name: Update Camada
+on: workflow_dispatch
+permissions:
+  contents: write
+jobs:
+  update:
+    if: github.repository != 'camada-app/camada-cloudflare' && github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Replace src/ with the latest Camada release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if ! tag=$(gh release view -R camada-app/camada-cloudflare --json tagName -q .tagName); then
+            echo "::error::Could not find Camada's latest release. Try again later."
+            exit 1
+          fi
+          git fetch --depth=1 https://github.com/camada-app/camada-cloudflare "refs/tags/$tag"
+          git restore --source=FETCH_HEAD --staged --worktree src
+          if git diff --cached --quiet; then
+            echo "Already up to date with $tag"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -q -m "Update Camada Worker to $tag"
+          git push
+          echo "Pushed $tag. Cloudflare redeploys the Worker from this push."
