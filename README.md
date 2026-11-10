@@ -18,6 +18,14 @@ Your Cloudflare API token stays in your account. Camada never sees it.
 - Verified good bots (search engines and the like) are never blocked by the rule.
 - If this Worker stops running, the rule expires on its own within 48 hours, so nothing stays blocked forever.
 
+## Updating
+
+Camada fixes most things on its side, so you don't need to do anything.
+
+When the Camada dashboard (Setup) says your Worker is out of date, open your copy of this repo on GitHub. Go to Actions, pick **Update Camada**, then choose Run workflow. Cloudflare redeploys the Worker within a few minutes. Your settings (zone, hosts and secrets) are kept.
+
+If Actions are off, copy the `src/` folder from the [latest release](https://github.com/camada-app/camada-cloudflare/releases) into your repo and commit it. Cloudflare redeploys when you push.
+
 ## License
 
 MIT
