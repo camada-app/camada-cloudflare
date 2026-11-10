@@ -1,6 +1,6 @@
 {
   "name": "camada-cloudflare",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "Camada for Cloudflare: a Worker in your own account that sends your zone's request analytics to Camada and keeps a camada_block IP list in your WAF in sync.",
   "license": "MIT",
