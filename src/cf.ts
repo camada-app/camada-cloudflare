@@ -78,7 +78,7 @@ export async function reconcileList(run: Run, account: string): Promise<ListResu
     `Cloudflare would not create the camada_block IP list: ${why}. Free plans allow one custom list: delete an unused list, or make sure the API token has Account > Account Filter Lists > Edit.`;
   const got = await cf(run, 'GET', path);
   if (got.status !== 200) return { error: cannot(got.why) };
-  if (got.status === 200 && !Array.isArray(got.result)) return { error: cannot(got.why) };
+  if (!Array.isArray(got.result)) return { error: cannot('unreadable reply') };
   const same = (got.result as any[]).filter((l) => l.name === LIST_NAME);
   const ours = same.find((l) => l.kind === 'ip' && String(l.description).startsWith(RULE_DESC + '.'));
   if (ours) return { id: ours.id, size: ours.num_items };
@@ -134,9 +134,9 @@ export async function reconcileRule(run: Run, zone: string, plan: RulePlan | nul
   const { nowS, hosts } = plan;
   // Hosts we cannot apply must not stop the deadline: our rule keeps its own hosts clause and gets a new number.
   const refused = !hosts
-    ? "Camada's server cannot apply HOSTS yet; the rule was left unchanged."
+    ? "Camada's server cannot apply HOSTS yet; the hosts in the rule were left unchanged."
     : hosts.length > 20 || !hosts.every((h) => typeof h === 'string' && HOST.test(h))
-      ? 'Camada sent a host name the Worker would not put in a rule; the rule was left unchanged. Check HOSTS.'
+      ? 'Camada sent a host name the Worker would not put in a rule; the hosts in the rule were left unchanged. Check HOSTS.'
       : undefined;
   if (refused && !mine) return { ...seen, error: refused };
   const deadline = plan.due || d0 == null || d0 - nowS < DAY ? nowS + 2 * DAY : d0;
