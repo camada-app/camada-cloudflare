@@ -9,18 +9,16 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Replace src/ with the latest Camada release
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          upstream=https://github.com/camada-app/camada-cloudflare
-          tag=$(git ls-remote --tags --refs --sort=-v:refname "$upstream" 'v*' \
-            | sed 's#.*refs/tags/##' | grep -E '^v[0-9]+' | grep -v -- '-' | head -n1 || true)
-          if [ -z "$tag" ]; then
-            echo "::error::Camada has not published a release yet"
+          if ! tag=$(gh release view -R camada-app/camada-cloudflare --json tagName -q .tagName); then
+            echo "::error::Could not find Camada's latest release. Try again later."
             exit 1
           fi
-          git fetch --depth=1 "$upstream" "refs/tags/$tag"
-          git rm -r -q --ignore-unmatch src
-          git checkout FETCH_HEAD -- src
+          git fetch --depth=1 https://github.com/camada-app/camada-cloudflare "refs/tags/$tag"
+          git restore --source=FETCH_HEAD --staged --worktree src
           if git diff --cached --quiet; then
             echo "Already up to date with $tag"
             exit 0
