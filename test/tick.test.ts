@@ -304,7 +304,7 @@ describe('deadline and hosts', () => {
     await tick({ HOSTS: 'bad host' });
     expect(JSON.parse(dec.decode(to('PATCH', '/rules/r1')[0].body)).expression).toBe(ruleExpression(['a.example.com'], deadline(3600)));
     expect(status().deadline).toBe(deadline(3600));
-    expect(status().errors.rule).toMatch(/would not put in a rule/);
+    expect(status().errors.rule).toMatch(/would not put in a rule; the hosts in the rule were left unchanged/);
   });
 
   it('ruleExpression and parseDeadline', () => {
@@ -371,6 +371,13 @@ describe('ship', () => {
     w.rows = () => Response.json({ split: true }, { status: 413 });
     await tick();
     expect(status().errors).toEqual({});
+  });
+
+  it('a 413 with skipped says the window was too large and was skipped, not "retries"', async () => {
+    w.plan = mkPlan(2);
+    w.rows = () => Response.json({ skipped: true }, { status: 413 });
+    await tick();
+    expect(status().errors.ship).toBe('A window of analytics was too large for Camada and was skipped; its data was dropped.');
   });
 
   it('a window without from/to (old analyst) ships nothing and reports it', async () => {
