@@ -6,7 +6,7 @@
 //   3. sync the camada_block list in this account from Camada's published blocks
 //   4. report health to Camada; the Cloudflare token never leaves this account
 
-import { Budget, MAX_FETCHES, call, cf, GRAPHQL, reconcileList, reconcileRule, type Run } from './cf';
+import { Budget, MAX_FETCHES, call, cf, cfHeaders, GRAPHQL, json, reconcileList, reconcileRule, type Run } from './cf';
 import { VERSION } from './version';
 
 export interface Env {
@@ -38,7 +38,6 @@ const LIST_PERM = 'The API token cannot edit the camada_block list. Recreate it 
 const HEX = /^[0-9a-f]{32}$/;
 const ID = /^[A-Za-z0-9-]{1,64}$/;
 const clean = (s: unknown) => String(s).replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 300);
-const json = (res: Response) => res.json<any>().catch(() => null);
 
 async function getPlan({ cam, errors }: Tick, zone: string, hosts: string): Promise<any | null> {
   const res = await cam(`/edge/plan?zone=${zone}&hosts=${encodeURIComponent(hosts)}`);
@@ -62,18 +61,21 @@ async function ship({ run, cam, errors }: Tick, zone: string, windows: any): Pro
     }
     const gql = await call(run, GRAPHQL, {
       method: 'POST',
-      headers: { authorization: `Bearer ${run.token}`, 'content-type': 'application/json', 'accept-encoding': 'gzip' },
+      headers: { ...cfHeaders(run), 'accept-encoding': 'gzip' },
       body: JSON.stringify({ query: w.query, variables: w.variables }),
       encodeResponseBody: 'manual',
     });
     const enc = gql.headers.get('content-encoding');
     const gzip = enc === 'gzip';
-    if (gql.status !== 200 || (enc && enc !== 'identity' && !gzip)) {
+    const refused =
+      gql.status !== 200
+        ? `Cloudflare refused the analytics read (HTTP ${gql.status}). Make sure the API token has Zone > Analytics > Read for this zone.`
+        : enc && enc !== 'identity' && !gzip
+          ? `Cloudflare answered with an encoding the Worker cannot pass on (${clean(enc)}).`
+          : undefined;
+    if (refused) {
       void gql.body?.cancel();
-      errors.ship =
-        gql.status !== 200
-          ? `Cloudflare refused the analytics read (HTTP ${gql.status}). Make sure the API token has Zone > Analytics > Read for this zone.`
-          : `Cloudflare answered with an encoding the Worker cannot pass on (${clean(enc)}).`;
+      errors.ship = refused;
       break;
     }
     const res = await cam(`/edge/rows?zone=${zone}&from=${encodeURIComponent(w.from)}&to=${encodeURIComponent(w.to)}`, {
@@ -121,12 +123,13 @@ async function syncList({ run, cam, errors }: Tick, account: string, listId: str
   }
   if (res.status !== 200 && res.status !== 204) return { outcome: res.status === 304 ? 'not modified' : `camada HTTP ${res.status}` };
 
-  const put = await cf(run, 'PUT', `${lists}/${listId}/items`, res.status === 200 ? res.body! : '[]');
+  const full = res.status === 200; // 204: Camada blocks nothing, so the list is emptied
+  const put = await cf(run, 'PUT', `${lists}/${listId}/items`, full ? res.body! : '[]');
   if (put.status === 200 && put.result?.operation_id) {
     return {
       op: { id: put.result.operation_id, state: 'pending', etag: res.headers.get('etag') },
-      overflow: res.status === 200 ? Number(res.headers.get('x-camada-overflow')) || 0 : 0,
-      outcome: res.status === 200 ? 'updated' : 'emptied',
+      overflow: full ? Number(res.headers.get('x-camada-overflow')) || 0 : 0,
+      outcome: full ? 'updated' : 'emptied',
     };
   }
   errors.list =
@@ -184,8 +187,7 @@ async function tick(env: Env): Promise<void> {
     if (lst.error) errors.reconcile = lst.error;
     else {
       // The deadline and the hosts clause come from the plan; the Worker never reads its own clock.
-      const nowS = plan && Math.floor(Date.parse(plan.now) / 1000);
-      const rule = await reconcileRule(run, zone, plan && { nowS, hosts, due: plan.deadline_due === true });
+      const rule = await reconcileRule(run, zone, plan && { nowS: Math.floor(Date.parse(plan.now) / 1000), hosts, due: plan.deadline_due === true });
       Object.assign(status, { rule_id: rule.rule_id, deadline: rule.deadline });
       errors.rule = rule.error;
     }
