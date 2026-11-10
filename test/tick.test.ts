@@ -202,6 +202,40 @@ describe('reconcile', () => {
     await tick();
     expect(status().errors.rule).toMatch(/turned off/);
   });
+
+  it('a disabled rule of ours stays disabled when the deadline is pushed', async () => {
+    await tick();
+    w.entry!.rules[0].enabled = false;
+    w.plan = mkPlan(0, { now: '2026-11-09T17:40:12Z', deadline_due: true });
+    await tick();
+    expect(JSON.parse(dec.decode(to('PATCH', '/rules/r1').at(-1)!.body)).enabled).toBe(false);
+  });
+
+  it('a rule whose description only starts with ours is foreign', async () => {
+    w.entry = { id: 'rs1', rules: [{ id: 'c0', ref: RULE_REF, description: 'camada:block v10', expression: 'true' }] };
+    await tick();
+    expect(writes().filter((c) => c.url.includes('rulesets'))).toEqual([]);
+    expect(status().errors.rule).toMatch(/was not created by Camada/);
+  });
+
+  it('a list whose description only starts with ours (v10) is foreign', async () => {
+    w.lists = [{ id: 'x', name: LIST_NAME, kind: 'ip', description: 'camada:block v10. other', num_items: 0 }];
+    await tick();
+    expect(status().errors.reconcile).toMatch(/was not created by Camada/);
+  });
+
+  it('a list reply that is not an array is reported, not thrown', async () => {
+    w.lists = {} as any;
+    await tick();
+    expect(status().errors.reconcile).toMatch(/would not create the camada_block IP list/);
+  });
+
+  it('an entrypoint reply without an id changes nothing', async () => {
+    w.entry = { rules: [] } as any;
+    await tick();
+    expect(writes().filter((c) => c.url.includes('rulesets'))).toEqual([]);
+    expect(status().errors.rule).toMatch(/without an id/);
+  });
 });
 
 describe('deadline and hosts', () => {
@@ -262,6 +296,17 @@ describe('deadline and hosts', () => {
     expect(status().errors.rule).toMatch(/cannot apply HOSTS yet/);
   });
 
+  it('hosts refused but the deadline is due: our rule keeps its hosts clause and gets the new deadline', async () => {
+    await tick();
+    w.entry!.rules[0].expression = ruleExpression(['a.example.com'], deadline());
+    w.calls.length = 0;
+    w.plan = mkPlan(0, { now: '2026-11-09T17:40:12Z', hosts: ['bad host'], deadline_due: true });
+    await tick({ HOSTS: 'bad host' });
+    expect(JSON.parse(dec.decode(to('PATCH', '/rules/r1')[0].body)).expression).toBe(ruleExpression(['a.example.com'], deadline(3600)));
+    expect(status().deadline).toBe(deadline(3600));
+    expect(status().errors.rule).toMatch(/would not put in a rule/);
+  });
+
   it('ruleExpression and parseDeadline', () => {
     expect(ruleExpression([], 5)).toBe('(ip.src in $camada_block and not cf.client.bot and http.request.timestamp.sec lt 5)');
     expect(ruleExpression(['a.com'], 5)).toMatch(/lt 5 and http\.host in \{"a\.com"\}\)$/);
@@ -315,6 +360,27 @@ describe('ship', () => {
     expect(status().errors.ship).toMatch(/Cloudflare refused the analytics read \(HTTP 403\).*Analytics > Read/);
   });
 
+  it('a Camada 503 on rows is reported as a retry; 409 and a 413 split stay silent', async () => {
+    w.plan = mkPlan(2);
+    w.rows = () => new Response('x', { status: 503 });
+    await tick();
+    expect(status().errors.ship).toBe('Camada did not take the analytics (HTTP 503); the Worker retries in 5 minutes.');
+    w.rows = () => new Response('x', { status: 409 });
+    await tick();
+    expect(status().errors).toEqual({});
+    w.rows = () => Response.json({ split: true }, { status: 413 });
+    await tick();
+    expect(status().errors).toEqual({});
+  });
+
+  it('a window without from/to (old analyst) ships nothing and reports it', async () => {
+    w.plan = mkPlan(1);
+    delete w.plan.windows[0].from;
+    await tick();
+    expect(w.calls.filter((c) => c.url === GQL)).toHaveLength(0);
+    expect(status().errors.ship).toMatch(/did not send the analytics query/);
+  });
+
   it('a Camada 422 on rows is reported with its message', async () => {
     w.plan = mkPlan(2);
     w.rows = () => Response.json({ error: { code: 'graphql_error', message: 'bad field' } }, { status: 422 });
@@ -353,13 +419,13 @@ describe('list sync', () => {
     expect(status()).toMatchObject({ op: { id: 'op1', state: 'pending', etag: '"cf1.none.10000"' }, overflow: 0 });
   });
 
-  it('a pending op still running: no /edge/list call, the op is reported', async () => {
+  it('a pending op still running: no /edge/list call, and no op in the status (keeps the saved etag)', async () => {
     w.plan = mkPlan(0, { pending_op: 'opP' });
     w.ops.opP = 'running';
     await tick();
     expect(to('GET', '/edge/list')).toHaveLength(0);
     expect(items()).toHaveLength(0);
-    expect(status().op).toEqual({ id: 'opP', state: 'running' });
+    expect(status().op).toBeUndefined();
   });
 
   it('a completed or vanished op is reported and the list is not fetched this tick', async () => {
@@ -431,6 +497,30 @@ describe('Camada calls and stops', () => {
     expect(to('PUT', 'entrypoint')).toHaveLength(0);
     expect(to('GET', '/edge/list')).toHaveLength(0);
     expect(status()).toMatchObject({ list_id: 'list1' });
+  });
+
+  it('bad_hosts without a message falls back to a fixed one', async () => {
+    w.planReply = () => Response.json({ error: { code: 'bad_hosts' } }, { status: 400 });
+    await tick({ HOSTS: 'x' });
+    expect(status().errors.plan).toMatch(/^Camada did not accept HOSTS\. Set HOSTS/);
+  });
+
+  it('a Cloudflare fetch that rejects ends the tick early, reports it, and still posts status', async () => {
+    const real = fake;
+    vi.mocked(fetch).mockImplementation((async (i: any, init: any) => {
+      if (String(i).endsWith(ENTRY)) throw new TypeError('network down');
+      return real(i, init);
+    }) as typeof fetch);
+    await tick();
+    expect(status().errors.reconcile).toBe('The tick stopped early (TypeError: network down); the Worker retries in 5 minutes.');
+  });
+
+  it('a 401 on /edge/status logs the CAMADA_KEY message', async () => {
+    const real = fake;
+    vi.mocked(fetch).mockImplementation((async (i: any, init: any) =>
+      String(i).endsWith('/edge/status') ? new Response('x', { status: 401 }) : real(i, init)) as typeof fetch);
+    await tick();
+    expect(logs.join('\n')).toContain('did not accept CAMADA_KEY');
   });
 
   it('a busy Camada (503) is reported as errors.plan and the rule is left alone', async () => {

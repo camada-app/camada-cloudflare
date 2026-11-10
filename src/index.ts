@@ -43,7 +43,10 @@ async function getPlan({ cam, errors }: Tick, zone: string, hosts: string): Prom
   const res = await cam(`/edge/plan?zone=${zone}&hosts=${encodeURIComponent(hosts)}`);
   const body = await json(res);
   if (res.status === 409) throw new Stop(`camada: ${clean(body?.error?.message ?? 'zone limit reached')}`);
-  if (res.status === 400 && body?.error?.code === 'bad_hosts') errors.plan = body.error.message;
+  if (res.status === 400 && body?.error?.code === 'bad_hosts') errors.plan =
+    typeof body.error.message === 'string' && body.error.message
+      ? body.error.message
+      : 'Camada did not accept HOSTS. Set HOSTS to comma-separated hostnames, or leave it empty for the whole zone.';
   else if (res.status !== 200) errors.plan = `Camada was busy (HTTP ${res.status}); the Worker retries in 5 minutes.`;
   else if (!Number.isFinite(Date.parse(body?.now))) errors.plan = 'Camada sent a plan the Worker could not read; it retries in 5 minutes.';
   else return body;
@@ -55,7 +58,7 @@ async function ship({ run, cam, errors }: Tick, zone: string, windows: any): Pro
   let shipped = 0;
   for (const w of Array.isArray(windows) ? windows : []) {
     if (run.fetches + 5 > MAX_FETCHES) break; // keep 3 calls for the list sync and status; Camada's cursor resumes next tick
-    if (typeof w?.query !== 'string' || typeof w.variables !== 'object' || !w.variables) {
+    if (typeof w?.query !== 'string' || typeof w.variables !== 'object' || !w.variables || typeof w.from !== 'string' || typeof w.to !== 'string') {
       errors.ship = "Camada's server did not send the analytics query, so no data was sent. This clears itself when Camada updates; nothing to change on your side.";
       break;
     }
@@ -88,7 +91,13 @@ async function ship({ run, cam, errors }: Tick, zone: string, windows: any): Pro
       errors.ship = `Camada could not read the analytics (${clean(reply?.error?.code)}: ${clean(reply?.error?.message)}).`;
       break;
     }
-    if (res.status !== 200 || reply?.split) break; // split, 409, 413, 404, 429, 503: the next tick re-plans
+    if (res.status !== 200 || reply?.split) {
+      // split (also as a 413) and 409 are normal: the next tick re-plans. Anything else is worth saying.
+      if (res.status !== 200 && res.status !== 409 && !reply?.split) {
+        errors.ship = `Camada did not take the analytics (HTTP ${res.status}); the Worker retries in 5 minutes.`;
+      }
+      break;
+    }
     shipped++;
   }
   return shipped;
@@ -112,7 +121,9 @@ async function syncList({ run, cam, errors }: Tick, account: string, listId: str
       errors.list = r.status === 401 || r.status === 403 ? LIST_PERM : `Cloudflare would not report the list update: ${r.why}.`;
       return { outcome: 'op unknown' };
     }
-    return { op: { id: pending, state, error: state === 'failed' ? clean(r.result.error) : undefined }, outcome: `op ${state}` };
+    // Still pending/running: no op in the status, or Camada would erase the etag it saved at PUT time.
+    if (state === 'pending' || state === 'running') return { outcome: `op ${state}` };
+    return { op: { id: pending, state, error: state === 'failed' ? clean(r.result.error ?? 'failed') : undefined }, outcome: `op ${state}` };
   }
 
   const etag = plan.list_etag;
@@ -204,7 +215,13 @@ async function tick(env: Env): Promise<void> {
       console.warn(e.message);
       return;
     }
-    console.warn(`camada: tick stopped early (${e instanceof Budget ? 'subrequest budget used up' : (e as Error).name})`);
+    if (e instanceof Budget) console.warn('camada: tick stopped early (subrequest budget used up)');
+    else {
+      const err = e as Error;
+      const text = `The tick stopped early (${clean(err?.name)}: ${clean(err?.message).slice(0, 120)}); the Worker retries in 5 minutes.`;
+      errors.reconcile ??= text;
+      if (!status.zone) console.warn(`camada: ${text}`); // with a zone, the summary below logs it
+    }
   }
   if (!status.zone) return;
 
@@ -215,7 +232,7 @@ async function tick(env: Env): Promise<void> {
     method: 'POST',
     body: JSON.stringify({ ...status, errors: reported }),
     headers: { 'content-type': 'application/json' },
-  }).catch(() => console.warn('camada: status was not delivered'));
+  }).catch((e) => console.warn(e instanceof Stop ? e.message : 'camada: status was not delivered'));
 }
 
 export default {

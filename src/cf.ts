@@ -75,8 +75,9 @@ export async function reconcileList(run: Run, account: string): Promise<ListResu
     `Cloudflare would not create the camada_block IP list: ${why}. Free plans allow one custom list: delete an unused list, or make sure the API token has Account > Account Filter Lists > Edit.`;
   const got = await cf(run, 'GET', path);
   if (got.status !== 200) return { error: cannot(got.why) };
+  if (got.status === 200 && !Array.isArray(got.result)) return { error: cannot(got.why) };
   const same = (got.result as any[]).filter((l) => l.name === LIST_NAME);
-  const ours = same.find((l) => l.kind === 'ip' && String(l.description).startsWith(RULE_DESC));
+  const ours = same.find((l) => l.kind === 'ip' && String(l.description).startsWith(RULE_DESC + '.'));
   if (ours) return { id: ours.id, size: ours.num_items };
   if (same.length) {
     return {
@@ -111,8 +112,11 @@ export async function reconcileRule(run: Run, zone: string, plan: RulePlan | nul
   if (got.status === 401 || got.status === 403) return { error: perm };
   if (got.status !== 200 && got.status !== 404) return { error: `Cloudflare would not read the zone's custom rules: ${got.why}.` };
   const rs = got.status === 200 ? got.result : null;
+  if (got.status === 200 && typeof rs?.id !== 'string') {
+    return { error: "Cloudflare returned the zone's custom rules without an id; the rule was left unchanged." };
+  }
   const rules: any[] = rs?.rules ?? [];
-  const mine = rules.find((r) => r.ref === RULE_REF && String(r.description).startsWith(RULE_DESC));
+  const mine = rules.find((r) => r.ref === RULE_REF && r.description === RULE_DESC);
   if (!mine && rules.some((r) => r.ref === RULE_REF)) {
     return {
       error:
@@ -125,13 +129,18 @@ export async function reconcileRule(run: Run, zone: string, plan: RulePlan | nul
   if (!plan) return { ...seen, error: off };
 
   const { nowS, hosts } = plan;
-  if (!hosts) return { ...seen, error: "Camada's server cannot apply HOSTS yet; the rule was left unchanged." };
-  if (hosts.length > 20 || !hosts.every((h) => typeof h === 'string' && HOST.test(h))) {
-    return { ...seen, error: 'Camada sent a host name the Worker would not put in a rule; the rule was left unchanged. Check HOSTS.' };
-  }
+  // Hosts we cannot apply must not stop the deadline: our rule keeps its own hosts clause and gets a new number.
+  const refused = !hosts
+    ? "Camada's server cannot apply HOSTS yet; the rule was left unchanged."
+    : hosts.length > 20 || !hosts.every((h) => typeof h === 'string' && HOST.test(h))
+      ? 'Camada sent a host name the Worker would not put in a rule; the rule was left unchanged. Check HOSTS.'
+      : undefined;
+  if (refused && !mine) return { ...seen, error: refused };
   const deadline = plan.due || d0 == null || d0 - nowS < DAY ? nowS + 2 * DAY : d0;
-  const expression = ruleExpression(hosts, deadline);
-  if (mine && expression === mine.expression) return { ...seen, error: off };
+  const expression = refused
+    ? mine.expression.replace(/(http\.request\.timestamp\.sec lt )\d+/, `$1${deadline}`)
+    : ruleExpression(hosts!, deadline);
+  if (mine && expression === mine.expression) return { ...seen, error: refused ?? off };
 
   const rule = { action: 'block', expression, description: RULE_DESC, ref: RULE_REF, enabled: mine?.enabled !== false };
   const body = JSON.stringify(rule);
@@ -149,5 +158,5 @@ export async function reconcileRule(run: Run, zone: string, plan: RulePlan | nul
     };
   }
   const written = (w.result?.rules ?? []).find((r: any) => r.ref === RULE_REF);
-  return { rule_id: written?.id ?? mine?.id, deadline, error: off };
+  return { rule_id: written?.id ?? mine?.id, deadline, error: refused ?? off };
 }
