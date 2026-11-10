@@ -278,8 +278,8 @@ describe('deadline and hosts', () => {
     expect(to('GET', '/edge/plan')[0].url).toContain('hosts=a.example.com%2Cb.example.com');
   });
 
-  it('a host that is not a hostname never reaches a rule', async () => {
-    w.plan = mkPlan(0, { hosts: ['a.example.com" or true or http.host in {"x'] });
+  it.each(['a.example.com" or true or http.host in {"x', 'A.example.com', 'a.example.com.', 'a.example.com:443'])('a host that is not a bare lowercase hostname never reaches a rule: %s', async (host) => {
+    w.plan = mkPlan(0, { hosts: [host] });
     await tick();
     expect(to('PUT', 'entrypoint')).toHaveLength(0);
     expect(status().errors.rule).toMatch(/would not put in a rule/);
