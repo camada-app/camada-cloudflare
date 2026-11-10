@@ -206,7 +206,7 @@ Result: 934 rows, 5 IP groups, `sum(ips.count) == tot.count == 2562`.
 
 | Open point | Result |
 |---|---|
-| (a) Secrets and descriptions | `CAMADA_KEY` and `CLOUDFLARE_API_TOKEN` are prompted with their `package.json` `cloudflare.bindings` descriptions. `wrangler secret list` (run in the dashboard session per the camada-all-2hh7 record, not with the spike token) shows both as `secret_text`. |
+| (a) Secrets and descriptions | `CAMADA_KEY` and `CLOUDFLARE_API_TOKEN` are prompted with their `package.json` `cloudflare.bindings` descriptions. `wrangler secret list` (per the camada-all-2hh7 record; credentials not recorded, and the spike token lacks Workers Scripts Read) shows both as `secret_text`. |
 | (b) Vars | `ZONE` and `HOSTS` are prompted, plus `CAMADA_URL` prefilled `https://in.camada.app` with no description. All 3 vars are bound. |
 | (c) Cron | Build log: `Deployed triggers: schedule */5 * * * *`. |
 
