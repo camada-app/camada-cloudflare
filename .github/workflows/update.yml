@@ -4,7 +4,7 @@ permissions:
   contents: write
 jobs:
   update:
-    if: github.repository != 'camada-app/camada-cloudflare'
+    if: github.repository != 'camada-app/camada-cloudflare' && github.ref_name == github.event.repository.default_branch
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
