@@ -93,7 +93,9 @@ async function ship({ run, cam, errors }: Tick, zone: string, windows: any): Pro
     }
     if (res.status !== 200 || reply?.split) {
       // split (also as a 413) and 409 are normal: the next tick re-plans. Anything else is worth saying.
-      if (res.status !== 200 && res.status !== 409 && !reply?.split) {
+      if (reply?.skipped) {
+        errors.ship = 'A window of analytics was too large for Camada and was skipped; its data was dropped.';
+      } else if (res.status !== 200 && res.status !== 409 && !reply?.split) {
         errors.ship = `Camada did not take the analytics (HTTP ${res.status}); the Worker retries in 5 minutes.`;
       }
       break;
@@ -219,8 +221,9 @@ async function tick(env: Env): Promise<void> {
     else {
       const err = e as Error;
       const text = `The tick stopped early (${clean(err?.name)}: ${clean(err?.message).slice(0, 120)}); the Worker retries in 5 minutes.`;
+      // the summary below logs errors.reconcile when we set it here; otherwise log the exception now
+      if (errors.reconcile || !status.zone) console.warn(`camada: ${text}`);
       errors.reconcile ??= text;
-      if (!status.zone) console.warn(`camada: ${text}`); // with a zone, the summary below logs it
     }
   }
   if (!status.zone) return;
