@@ -193,9 +193,10 @@ async function tick(env: Env): Promise<void> {
     const account: string = z.account.id;
     Object.assign(status, { zone, account });
 
-    const rawHosts = (env.HOSTS ?? '').trim() === '*' ? '' : env.HOSTS ?? '';
+    // A lone `*` is the whole zone; send it as empty so an analyst that predates `*` accepts it too.
+    const trimmed = (env.HOSTS ?? '').trim(), rawHosts = trimmed === '*' ? '' : trimmed;
     const plan = await getPlan(t, zone, rawHosts);
-    const hosts = Array.isArray(plan?.hosts) ? plan.hosts : rawHosts.trim() === '' ? [] : null;
+    const hosts = Array.isArray(plan?.hosts) ? plan.hosts : rawHosts === '' ? [] : null;
     const lst = await reconcileList(run, account);
     Object.assign(status, { list_id: lst.id, list_size: lst.size });
     if (lst.error) errors.reconcile = lst.error;
