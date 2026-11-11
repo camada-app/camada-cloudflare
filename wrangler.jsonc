@@ -10,7 +10,7 @@
   "triggers": { "crons": ["*/5 * * * *"] },
   "vars": {
     "ZONE": "",
-    "HOSTS": "",
+    "HOSTS": "*",
     "CAMADA_URL": "https://in.camada.app"
   },
   "observability": { "enabled": true }

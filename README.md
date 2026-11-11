@@ -20,7 +20,7 @@ Cloudflare copies this repo to your GitHub account and deploys it. You may need 
 - `CAMADA_KEY`: from the Camada dashboard.
 - `CLOUDFLARE_API_TOKEN`: see below.
 - `ZONE`: your domain, for example `example.com`.
-- `HOSTS`: optional. Limits Camada to some hostnames.
+- `HOSTS`: `*` for every hostname, or a comma-separated list such as `www.example.com,shop.example.com`.
 
 Leave `CAMADA_URL` as it is.
 
@@ -48,7 +48,7 @@ Narrow the token to your one zone and your account. If the form shows fewer than
 
 1. Copy `.dev.vars.example` to `.dev.vars` and fill in `CAMADA_KEY` and `CLOUDFLARE_API_TOKEN`.
 2. Set `ZONE` in the `vars` of `wrangler.jsonc`, or in `.dev.vars`.
-3. Run `npm run dev`.
+3. Run `npm run dev`. An empty `HOSTS` also means every hostname.
 4. Trigger one run: `curl "http://localhost:8787/__scheduled"`.
 
 The path `/__scheduled` is what Wrangler 4.160.0 documents for `--test-scheduled`.
