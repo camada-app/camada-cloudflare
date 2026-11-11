@@ -36,7 +36,7 @@
         "description": "Leave as is. This is Camada's ingest URL, and you never need to change it."
       },
       "HOSTS": {
-        "description": "Optional. Comma-separated hostnames to watch and protect, for example `www.example.com,shop.example.com`. Leave empty for every hostname in the zone."
+        "description": "`*` for every hostname in the zone, or a comma-separated list such as `www.example.com,shop.example.com`."
       }
     }
   },

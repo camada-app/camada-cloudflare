@@ -46,7 +46,7 @@ async function getPlan({ cam, errors }: Tick, zone: string, hosts: string): Prom
   if (res.status === 400 && body?.error?.code === 'bad_hosts') errors.plan =
     typeof body.error.message === 'string' && body.error.message
       ? body.error.message
-      : 'Camada did not accept HOSTS. Set HOSTS to comma-separated hostnames, or leave it empty for the whole zone.';
+      : 'Camada did not accept HOSTS. Set HOSTS to * for every hostname, or to comma-separated hostnames.';
   else if (res.status !== 200) errors.plan = `Camada was busy (HTTP ${res.status}); the Worker retries in 5 minutes.`;
   else if (!Number.isFinite(Date.parse(body?.now))) errors.plan = 'Camada sent a plan the Worker could not read; it retries in 5 minutes.';
   else return body;
@@ -193,8 +193,9 @@ async function tick(env: Env): Promise<void> {
     const account: string = z.account.id;
     Object.assign(status, { zone, account });
 
-    const plan = await getPlan(t, zone, env.HOSTS ?? '');
-    const hosts = Array.isArray(plan?.hosts) ? plan.hosts : (env.HOSTS ?? '').trim() === '' ? [] : null;
+    const rawHosts = (env.HOSTS ?? '').trim() === '*' ? '' : env.HOSTS ?? '';
+    const plan = await getPlan(t, zone, rawHosts);
+    const hosts = Array.isArray(plan?.hosts) ? plan.hosts : rawHosts.trim() === '' ? [] : null;
     const lst = await reconcileList(run, account);
     Object.assign(status, { list_id: lst.id, list_size: lst.size });
     if (lst.error) errors.reconcile = lst.error;

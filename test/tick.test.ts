@@ -296,6 +296,20 @@ describe('deadline and hosts', () => {
     expect(status().errors.rule).toMatch(/cannot apply HOSTS yet/);
   });
 
+  it('HOSTS * is sent as hosts= and gives no host clause, even from an analyst that does not echo hosts', async () => {
+    w.plan = mkPlan(1);
+    await tick({ HOSTS: ' * ' });
+    expect(to('GET', '/edge/plan')[0].url).toMatch(/hosts=$/);
+    expect(w.calls.filter((c) => c.url === GQL)).toHaveLength(1);
+    expect(dec.decode(to('PUT', 'entrypoint')[0].body)).not.toContain('http.host');
+    w.entry = null;
+    w.calls.length = 0;
+    delete w.plan.hosts;
+    await tick({ HOSTS: '*' });
+    expect(status().errors.rule).toBeUndefined();
+    expect(dec.decode(to('PUT', 'entrypoint')[0].body)).not.toContain('http.host');
+  });
+
   it('hosts refused but the deadline is due: our rule keeps its hosts clause and gets the new deadline', async () => {
     await tick();
     w.entry!.rules[0].expression = ruleExpression(['a.example.com'], deadline());
@@ -509,7 +523,7 @@ describe('Camada calls and stops', () => {
   it('bad_hosts without a message falls back to a fixed one', async () => {
     w.planReply = () => Response.json({ error: { code: 'bad_hosts' } }, { status: 400 });
     await tick({ HOSTS: 'x' });
-    expect(status().errors.plan).toMatch(/^Camada did not accept HOSTS\. Set HOSTS/);
+    expect(status().errors.plan).toBe('Camada did not accept HOSTS. Set HOSTS to * for every hostname, or to comma-separated hostnames.');
   });
 
   it('a Cloudflare fetch that rejects ends the tick early, reports it, and still posts status', async () => {
