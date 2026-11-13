@@ -1,5 +1,7 @@
 # Camada for Cloudflare
 
+[Cloudflare guide](https://www.camada.app/docs/cloudflare) · [Bot detection](https://www.camada.app/bot-detection) · [Bot signal test](https://www.camada.app/tools/bot-test) · [Pricing](https://www.camada.app/pricing).
+
 Keep bad actors out of a site that already runs on Cloudflare, with no code changes.
 
 This Worker runs in your own Cloudflare account on a schedule. It never sits in front of your site. Every 5 minutes it:
@@ -75,6 +77,16 @@ Do these in order:
 3. Delete the list: Manage Account, Configurations, Lists, `camada_block`, Delete.
 
 The order matters because the rule uses the list, and a running Worker would recreate both.
+
+## Docs and links
+
+Read the Cloudflare guides on [camada.app](https://www.camada.app/docs).
+
+- [Cloudflare guide](https://www.camada.app/docs/cloudflare): sync zone logs and WAF IP lists with zero app changes.
+- [Hono guide](https://www.camada.app/docs/hono): block on the first request inside your own Cloudflare Worker.
+- [Bot detection](https://www.camada.app/bot-detection): compare scheduled WAF sync with inline SDK checks.
+- [Bot signal test](https://www.camada.app/tools/bot-test): check live browser, HTTP, and TLS signals from your client.
+- [Pricing](https://www.camada.app/pricing): compare the free tier and paid plans.
 
 ## License
 
