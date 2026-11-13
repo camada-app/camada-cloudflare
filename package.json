@@ -3,6 +3,28 @@
   "version": "0.1.0",
   "private": true,
   "description": "Camada for Cloudflare: a Worker in your own account that sends your zone's request analytics to Camada and keeps a camada_block IP list in your WAF in sync.",
+  "homepage": "https://www.camada.app/docs/cloudflare",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/camada-app/camada-cloudflare.git"
+  },
+  "bugs": {
+    "url": "https://github.com/camada-app/camada-cloudflare/issues"
+  },
+  "keywords": [
+    "camada",
+    "cloudflare",
+    "cloudflare-workers",
+    "waf",
+    "bot-detection",
+    "bot-protection",
+    "credential-stuffing",
+    "account-takeover",
+    "rate-limiting",
+    "proof-of-work",
+    "ai-scraper",
+    "security"
+  ],
   "license": "MIT",
   "type": "module",
   "scripts": {
