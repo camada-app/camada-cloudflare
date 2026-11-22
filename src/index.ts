@@ -46,7 +46,7 @@ async function getPlan({ cam, errors }: Tick, zone: string, hosts: string): Prom
   if (res.status === 400 && body?.error?.code === 'bad_hosts') errors.plan =
     typeof body.error.message === 'string' && body.error.message
       ? body.error.message
-      : 'Camada did not accept HOSTS. Set HOSTS to * for every hostname, or to comma-separated hostnames.';
+      : 'Camada did not accept HOSTS. Set HOSTS to * for every hostname, or to comma-separated hostnames or subdomain wildcards.';
   else if (res.status !== 200) errors.plan = `Camada was busy (HTTP ${res.status}); the Worker retries in 5 minutes.`;
   else if (!Number.isFinite(Date.parse(body?.now))) errors.plan = 'Camada sent a plan the Worker could not read; it retries in 5 minutes.';
   else return body;
@@ -202,7 +202,7 @@ async function tick(env: Env): Promise<void> {
     if (lst.error) errors.reconcile = lst.error;
     else {
       // The deadline and the hosts clause come from the plan; the Worker never reads its own clock.
-      const rule = await reconcileRule(run, zone, plan && { nowS: Math.floor(Date.parse(plan.now) / 1000), hosts, due: plan.deadline_due === true });
+      const rule = await reconcileRule(run, zone, plan && { nowS: Math.floor(Date.parse(plan.now) / 1000), hosts, due: plan.deadline_due === true, exempt: plan.exempt });
       Object.assign(status, { rule_id: rule.rule_id, deadline: rule.deadline });
       errors.rule = rule.error;
     }

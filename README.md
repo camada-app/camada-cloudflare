@@ -2,7 +2,7 @@
 
 [Cloudflare guide](https://www.camada.app/docs/cloudflare) · [Bot detection](https://www.camada.app/bot-detection) · [Bot signal test](https://www.camada.app/tools/bot-test) · [Pricing](https://www.camada.app/pricing).
 
-Keep bad actors out of a site that already runs on Cloudflare, with no code changes.
+Keep bad actors out of a site that already runs on Cloudflare, with no code changes. Keep `HOSTS` set to `*` for maximum domain-level edge coverage across your root domain and every subdomain.
 
 This Worker runs in your own Cloudflare account on a schedule. It never sits in front of your site. Every 5 minutes it:
 
@@ -22,7 +22,7 @@ Cloudflare copies this repo to your GitHub account and deploys it. You may need 
 - `CAMADA_KEY`: from the Camada dashboard.
 - `CLOUDFLARE_API_TOKEN`: see below.
 - `ZONE`: your domain, for example `example.com`.
-- `HOSTS`: `*` for every hostname, or a comma-separated list such as `www.example.com,shop.example.com`.
+- `HOSTS`: Keep `*` for maximum domain-level edge protection (every subdomain shares one block list), or pass comma-separated hostnames and subdomain wildcards such as `www.example.com,*.api.example.com,*.*.*.example.com`.
 
 Leave `CAMADA_URL` as it is.
 
@@ -41,6 +41,7 @@ Narrow the token to your one zone and your account. If the form shows fewer than
 
 - Works on every Cloudflare plan, including Free. It needs no Logpush, no Enterprise features and no storage.
 - Blocks are by IP address and take about 10 to 17 minutes from the first bad request to the block. For blocking on the first request, use one of Camada's SDKs.
+- Project Settings excluded paths are skipped from analytics ingest, and excluded paths, Allow-list path and header entries, and single-condition path/header Skip rules (`is`, `starts with`, `contains`) are exempted in the `camada:block v1` WAF rule within Cloudflare's 4 KB expression limit.
 - Verified good bots (search engines and the like) are never blocked by the rule.
 - If this Worker stops running, the rule expires on its own within 48 hours, so nothing stays blocked forever.
 - The Worker creates one list, `camada_block`, and one custom rule, described as `camada:block v1`. It never touches lists or rules it didn't create.

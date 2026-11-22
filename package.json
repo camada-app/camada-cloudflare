@@ -1,6 +1,6 @@
 {
   "name": "camada-cloudflare",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Camada for Cloudflare: a Worker in your own account that sends your zone's request analytics to Camada and keeps a camada_block IP list in your WAF in sync.",
   "homepage": "https://www.camada.app/docs/cloudflare",
@@ -58,7 +58,7 @@
         "description": "Leave as is. This is Camada's ingest URL, and you never need to change it."
       },
       "HOSTS": {
-        "description": "`*` for every hostname in the zone, or a comma-separated list such as `www.example.com,shop.example.com`."
+        "description": "Keep `*` for maximum domain-level edge coverage across your root domain and every subdomain, or list comma-separated hostnames or subdomain wildcards such as `www.example.com,*.api.example.com`."
       }
     }
   },

@@ -12,8 +12,30 @@ export const LIST_DESC =
 export const RULE_REF = 'camada_block_v1';
 export const RULE_DESC = 'camada:block v1';
 
-const HOST = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
+const EXACT_HOST = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
+const WILDCARD_HOST = /^(?=.{1,253}$)(?:\*\.){1,8}[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
+export const isHostEntry = (h: string): boolean => EXACT_HOST.test(h) || WILDCARD_HOST.test(h);
 const DAY = 86400;
+const MAX_EXPR_BYTES = 3800;
+const utf8Encoder = new TextEncoder();
+const utf8Bytes = (s: string): number => utf8Encoder.encode(s).byteLength;
+
+export interface HeaderExempt {
+  name: string;
+  op?: 'is' | 'contains';
+  value: string;
+}
+
+export interface EdgeExempt {
+  path_exact?: string[];
+  path_prefix?: string[];
+  headers?: HeaderExempt[];
+}
+
+const SAFE_PATH = (p: unknown): p is string => typeof p === 'string' && p.startsWith('/') && p.length <= 256 && !/[\x00-\x1f\x7f]/.test(p);
+const HEADER_NAME = /^[a-z0-9-]{1,64}$/;
+const SAFE_HVAL = (v: unknown): v is string => typeof v === 'string' && v.length >= 1 && v.length <= 256 && !/[\x00-\x1f\x7f]/.test(v);
+const cfStr = (s: string): string => `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 
 export class Budget extends Error {}
 
@@ -54,11 +76,81 @@ export async function cf(run: Run, method: string, path: string, body?: BodyInit
 
 // http.host is matched normalised (lowercase, no port, no trailing dot; checked live on a Free zone,
 // camada-all-tz8g), so a plain `in` set needs no port or dot variants, unlike the GraphQL host filter.
-// This relies on every entry the Worker writes being a bare lowercase hostname, which HOST and the server's bad_hosts check enforce.
-export const ruleExpression = (hosts: string[], deadline: number): string =>
-  `(ip.src in $camada_block and not cf.client.bot and http.request.timestamp.sec lt ${deadline}` +
-  (hosts.length ? ` and http.host in {${hosts.map((h) => `"${h}"`).join(' ')}}` : '') +
-  ')';
+// This relies on every entry the Worker writes being a bare lowercase hostname or leading wildcard, which isHostEntry and the server's bad_hosts check enforce.
+function hostClause(hosts: string[]): string {
+  const exact = hosts.filter((h) => !h.startsWith('*.'));
+  const wild = hosts.filter((h) => h.startsWith('*.'));
+  const parts: string[] = [];
+  if (exact.length) parts.push(`http.host in {${exact.map((h) => `"${h}"`).join(' ')}}`);
+  for (const w of wild) {
+    parts.push(!w.slice(2).startsWith('*.') ? `ends_with(http.host, "${w.slice(1)}")` : `http.host wildcard "${w}"`);
+  }
+  if (!parts.length) return '';
+  return parts.length === 1 ? parts[0] : `(${parts.join(' or ')})`;
+}
+
+export function buildRuleExpression(
+  hosts: string[],
+  deadline: number,
+  exempt?: EdgeExempt | null,
+): { expression: string; truncated: number } {
+  const hc = hostClause(hosts);
+  const head = `ip.src in $camada_block and not cf.client.bot and http.request.timestamp.sec lt ${deadline}${hc ? ` and ${hc}` : ''}`;
+
+  const exactAll = [...new Set((Array.isArray(exempt?.path_exact) ? exempt.path_exact : []).filter(SAFE_PATH).map((p) => p.toLowerCase()))];
+  const prefixAll = [...new Set((Array.isArray(exempt?.path_prefix) ? exempt.path_prefix : []).filter(SAFE_PATH).map((p) => p.toLowerCase()))];
+  const headersAll: Array<{ name: string; op: 'is' | 'contains'; value: string }> = [];
+  const seenHdr = new Set<string>();
+  for (const h of Array.isArray(exempt?.headers) ? exempt.headers : []) {
+    const name = typeof h?.name === 'string' ? h.name.toLowerCase() : '';
+    const op: 'is' | 'contains' = h?.op === 'contains' ? 'contains' : 'is';
+    if (!HEADER_NAME.test(name) || !SAFE_HVAL(h?.value)) continue;
+    const key = `${name}\0${op}\0${h.value}`;
+    if (!seenHdr.has(key)) {
+      seenHdr.add(key);
+      headersAll.push({ name, op, value: h.value });
+    }
+  }
+
+  const render = (
+    ex: string[],
+    pr: string[],
+    hd: Array<{ name: string; op: 'is' | 'contains'; value: string }>,
+  ): string => {
+    const clauses: string[] = [];
+    if (ex.length) clauses.push(`not (lower(http.request.uri.path) in {${ex.map(cfStr).join(' ')}})`);
+    if (pr.length === 1) clauses.push(`not starts_with(lower(http.request.uri.path), ${cfStr(pr[0])})`);
+    else if (pr.length > 1) clauses.push(`not (${pr.map((p) => `starts_with(lower(http.request.uri.path), ${cfStr(p)})`).join(' or ')})`);
+    const hdrExpr = (h: { name: string; op: 'is' | 'contains'; value: string }) =>
+      `any(http.request.headers[${cfStr(h.name)}][*] ${h.op === 'contains' ? 'contains' : 'eq'} ${cfStr(h.value)})`;
+    if (hd.length === 1) clauses.push(`not ${hdrExpr(hd[0])}`);
+    else if (hd.length > 1) clauses.push(`not (${hd.map(hdrExpr).join(' or ')})`);
+    return `(${head}${clauses.length ? ` and ${clauses.join(' and ')}` : ''})`;
+  };
+
+  const exKept: string[] = [];
+  const prKept: string[] = [];
+  const hdKept: Array<{ name: string; op: 'is' | 'contains'; value: string }> = [];
+  let truncated = 0;
+
+  for (const p of exactAll) {
+    if (utf8Bytes(render([...exKept, p], prKept, hdKept)) <= MAX_EXPR_BYTES) exKept.push(p);
+    else truncated++;
+  }
+  for (const p of prefixAll) {
+    if (utf8Bytes(render(exKept, [...prKept, p], hdKept)) <= MAX_EXPR_BYTES) prKept.push(p);
+    else truncated++;
+  }
+  for (const h of headersAll) {
+    if (utf8Bytes(render(exKept, prKept, [...hdKept, h])) <= MAX_EXPR_BYTES) hdKept.push(h);
+    else truncated++;
+  }
+
+  return { expression: render(exKept, prKept, hdKept), truncated };
+}
+
+export const ruleExpression = (hosts: string[], deadline: number, exempt?: EdgeExempt | null): string =>
+  buildRuleExpression(hosts, deadline, exempt).expression;
 
 export const parseDeadline = (expression: string): number | null => {
   const m = /http\.request\.timestamp\.sec lt (\d+)/.exec(expression ?? '');
@@ -96,6 +188,7 @@ export interface RulePlan {
   nowS: number; // the server's clock, from the plan
   hosts: string[] | null; // null: an old analyst that does not echo hosts
   due: boolean; // the plan's deadline_due
+  exempt?: EdgeExempt | null;
 }
 
 export interface RuleResult {
@@ -131,19 +224,22 @@ export async function reconcileRule(run: Run, zone: string, plan: RulePlan | nul
   const off = mine?.enabled === false ? 'The Camada WAF rule is turned off. Turn it on under Security > WAF > Custom rules to enforce blocks.' : undefined;
   if (!plan) return { ...seen, error: off };
 
-  const { nowS, hosts } = plan;
+  const { nowS, hosts, exempt } = plan;
   // Hosts we cannot apply must not stop the deadline: our rule keeps its own hosts clause and gets a new number.
   const refused = !hosts
     ? "Camada's server cannot apply HOSTS yet; the hosts in the rule were left unchanged."
-    : hosts.length > 20 || !hosts.every((h) => typeof h === 'string' && HOST.test(h))
+    : hosts.length > 20 || !hosts.every((h) => typeof h === 'string' && isHostEntry(h))
       ? 'Camada sent a host name the Worker would not put in a rule; the hosts in the rule were left unchanged. Check HOSTS.'
       : undefined;
   if (refused && !mine) return { ...seen, error: refused };
   const deadline = plan.due || d0 == null || d0 - nowS < DAY ? nowS + 2 * DAY : d0;
-  const expression = refused
-    ? mine.expression.replace(/(http\.request\.timestamp\.sec lt )\d+/, `$1${deadline}`)
-    : ruleExpression(hosts!, deadline);
-  if (mine && expression === mine.expression) return { ...seen, error: refused ?? off };
+  const built = refused ? null : buildRuleExpression(hosts!, deadline, exempt);
+  const expression = refused ? mine.expression.replace(/(http\.request\.timestamp\.sec lt )\d+/, `$1${deadline}`) : built!.expression;
+  const truncMsg =
+    built && built.truncated > 0
+      ? `${built.truncated} path or header exemption(s) did not fit in Cloudflare's 4 KB WAF rule limit.`
+      : undefined;
+  if (mine && expression === mine.expression) return { ...seen, error: refused ?? off ?? truncMsg };
 
   const rule = { action: 'block', expression, description: RULE_DESC, ref: RULE_REF, enabled: mine?.enabled !== false };
   const body = JSON.stringify(rule);
@@ -161,5 +257,5 @@ export async function reconcileRule(run: Run, zone: string, plan: RulePlan | nul
     };
   }
   const written = (w.result?.rules ?? []).find((r: any) => r.ref === RULE_REF);
-  return { rule_id: written?.id ?? mine?.id, deadline, error: refused ?? off };
+  return { rule_id: written?.id ?? mine?.id, deadline, error: refused ?? off ?? truncMsg };
 }

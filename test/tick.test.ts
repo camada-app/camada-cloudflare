@@ -2,7 +2,7 @@
 // The whole tick against a stateful fake of Cloudflare's API and Camada's /edge/*. Every fetch is recorded.
 import { createExecutionContext, createScheduledController, waitOnExecutionContext } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { LIST_DESC, LIST_NAME, RULE_DESC, RULE_REF, parseDeadline, ruleExpression } from '../src/cf';
+import { LIST_DESC, LIST_NAME, RULE_DESC, RULE_REF, buildRuleExpression, isHostEntry, parseDeadline, ruleExpression } from '../src/cf';
 import worker, { type Env } from '../src/index';
 import { VERSION } from '../src/version';
 
@@ -328,6 +328,79 @@ describe('deadline and hosts', () => {
     expect(parseDeadline(ruleExpression(['a.com'], 1234))).toBe(1234);
     expect(parseDeadline('true')).toBeNull();
   });
+
+  it('subdomain wildcards (*.example.com, *.*.*.example.com) and mixed hosts build valid Cloudflare expressions', () => {
+    expect(isHostEntry('*.example.com')).toBe(true);
+    expect(isHostEntry('*.api.example.com')).toBe(true);
+    expect(isHostEntry('*.*.*.example.com')).toBe(true);
+    for (const bad of ['*.com', 'a.*.example.com', '*foo.example.com', '**.example.com', 'example.com:443']) {
+      expect(isHostEntry(bad), bad).toBe(false);
+    }
+
+    expect(ruleExpression(['*.example.com'], 5)).toBe(
+      '(ip.src in $camada_block and not cf.client.bot and http.request.timestamp.sec lt 5 and ends_with(http.host, ".example.com"))',
+    );
+    expect(ruleExpression(['*.*.*.example.com'], 5)).toBe(
+      '(ip.src in $camada_block and not cf.client.bot and http.request.timestamp.sec lt 5 and http.host wildcard "*.*.*.example.com")',
+    );
+    expect(ruleExpression(['example.com', '*.api.example.com', '*.*.*.example.com'], 5)).toBe(
+      '(ip.src in $camada_block and not cf.client.bot and http.request.timestamp.sec lt 5 and (http.host in {"example.com"} or ends_with(http.host, ".api.example.com") or http.host wildcard "*.*.*.example.com"))',
+    );
+  });
+
+  it('plan.exempt adds safe path and header bypasses and reports when 4 KB limit truncates excess', async () => {
+    await tick();
+    w.calls.length = 0;
+    w.plan = mkPlan(0, {
+      now: '2026-11-09T17:40:12Z',
+      exempt: {
+        path_exact: ['/Login', '/bad\npath', 'noslash'],
+        path_prefix: ['/Health/', '/metrics'],
+        headers: [
+          { name: 'X-Internal', op: 'is', value: 'sec"ret\\1' },
+          { name: 'x-test', op: 'contains', value: 'allow' },
+          { name: 'bad header', op: 'is', value: 'x' },
+          { name: 'x-ctl', op: 'is', value: 'a\nb' },
+        ],
+      },
+    });
+    await tick();
+    const expr = JSON.parse(dec.decode(to('PATCH', '/rules/r1')[0].body)).expression;
+    expect(expr).toContain('not (lower(http.request.uri.path) in {"/login"})');
+    expect(expr).toContain('not (starts_with(lower(http.request.uri.path), "/health/") or starts_with(lower(http.request.uri.path), "/metrics"))');
+    expect(expr).toContain('any(http.request.headers["x-internal"][*] eq "sec\\"ret\\\\1")');
+    expect(expr).toContain('any(http.request.headers["x-test"][*] contains "allow")');
+    expect(expr).not.toContain('bad header');
+    expect(expr).not.toContain('noslash');
+    expect(status().errors.rule).toBeUndefined();
+
+    // Over 3800-byte expression budget: keeps the rule under 4096 bytes and warns in status.errors.rule.
+    w.calls.length = 0;
+    w.plan = mkPlan(0, {
+      now: '2026-11-09T18:40:12Z',
+      exempt: {
+        path_prefix: Array.from({ length: 80 }, (_, i) => `/very-long-excluded-service-prefix-${i.toString().padStart(2, '0')}/health`),
+      },
+    });
+    await tick();
+    const capped = JSON.parse(dec.decode(to('PATCH', '/rules/r1')[0].body)).expression;
+    expect(capped.length).toBeLessThanOrEqual(3800);
+    expect(status().errors.rule).toMatch(/did not fit in Cloudflare's 4 KB WAF rule limit/);
+
+    // Pure buildRuleExpression truncation check
+    const built = buildRuleExpression([], 5, {
+      path_exact: Array.from({ length: 200 }, (_, i) => `/exact-path-segment-${i.toString().padStart(3, '0')}`),
+    });
+    expect(built.truncated).toBeGreaterThan(0);
+    expect(built.expression.length).toBeLessThanOrEqual(3800);
+
+    // Multi-byte UTF-8 exemptions count UTF-8 byte length (not UTF-16 code units) against the 3800-byte cap.
+    const utf8 = buildRuleExpression([], 5, {
+      path_exact: Array.from({ length: 25 }, (_, i) => `/${'é'.repeat(90)}-${i}`),
+    });
+    expect(utf8.truncated).toBeGreaterThan(0);
+    expect(new TextEncoder().encode(utf8.expression).byteLength).toBeLessThanOrEqual(3800);
+  });
 });
 
 describe('ship', () => {
@@ -523,7 +596,7 @@ describe('Camada calls and stops', () => {
   it('bad_hosts without a message falls back to a fixed one', async () => {
     w.planReply = () => Response.json({ error: { code: 'bad_hosts' } }, { status: 400 });
     await tick({ HOSTS: 'x' });
-    expect(status().errors.plan).toBe('Camada did not accept HOSTS. Set HOSTS to * for every hostname, or to comma-separated hostnames.');
+    expect(status().errors.plan).toBe('Camada did not accept HOSTS. Set HOSTS to * for every hostname, or to comma-separated hostnames or subdomain wildcards.');
   });
 
   it('a Cloudflare fetch that rejects ends the tick early, reports it, and still posts status', async () => {
